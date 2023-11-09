@@ -191,6 +191,20 @@ public:
     readIdx_.store(nextReadIdx, std::memory_order_release);
   }
 
+  void allocate_pop_n(size_t n_items) noexcept {
+    auto const readIdx = readIdx_.load(std::memory_order_relaxed);
+    if (writeIdxCache_ == readIdx)
+      assert((writeIdxCache_ = writeIdx_.load(std::memory_order_acquire)) != readIdx &&
+           "Can only call pop() after front() has returned a non-nullptr");
+    //slots_[readIdx + kPadding].~T();
+    auto nextReadIdx = readIdx + n_items;
+    // TODO: the user has to use allocate_n which does the check if this fits
+    //if (nextReadIdx == capacity_) {
+      //nextReadIdx = 0;
+    //}
+    readIdx_.store(nextReadIdx, std::memory_order_release);
+  }
+
   RIGTORP_NODISCARD size_t size() const noexcept {
     std::ptrdiff_t diff = writeIdx_.load(std::memory_order_acquire) -
                           readIdx_.load(std::memory_order_acquire);

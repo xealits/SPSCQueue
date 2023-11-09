@@ -7,6 +7,12 @@ add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_11)
 
+message("CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
+
+set(CMAKE_CXX_FLAGS "-Wall -Wextra -g -gdwarf-4")
+#set(CMAKE_CXX_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+
 target_include_directories(${PROJECT_NAME} INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>)
@@ -24,6 +30,9 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     if (UNIX AND NOT APPLE)
         add_executable(SPSCQueueBenchmark src/SPSCQueueBenchmark.cpp)
         target_link_libraries(SPSCQueueBenchmark SPSCQueue Threads::Threads)
+
+        add_executable(SPSCQueueBenchmarkCoords src/SPSCQueueBenchmarkCoords.cpp)
+        target_link_libraries(SPSCQueueBenchmarkCoords SPSCQueue Threads::Threads)
     endif()
 
     if (((CMAKE_CXX_COMPILER_ID MATCHES "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 7.0)
