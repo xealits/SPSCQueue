@@ -101,6 +101,57 @@ public:
   SPSCQueue(const SPSCQueue &) = delete;
   SPSCQueue &operator=(const SPSCQueue &) = delete;
 
+  T* allocate_n(size_t n_items) {
+    auto writeIdx = writeIdx_.load(std::memory_order_relaxed);
+    n_items++; // it will need 1 item to save the number of following bytes
+    // it's not const as there may be the case when writeIdx is shifted to 0
+
+    if (n_items >= capacity_) {
+      throw std::runtime_error("SPSCCoord::allocate_n requested too large size: " + std::to_string(n_items) + " > " + std::to_string(capacity_));
+      //nDrops_++;
+      //return nullptr;
+    } // TODO: maybe modify to not throw?
+
+    // the case when it does not fit to the end of the buffer
+    if (n_items > (capacity_ - writeIdx)) {
+      // wait to clear enough space to write from the 0 index
+      //auto nextWriteIdx = writeIdx + 1;
+      while ((0+n_items) >= readIdxCache_) {
+        readIdxCache_ = readIdx_.load(std::memory_order_acquire);
+      }
+      writeIdx = 0;
+    }
+    // what if it's an inverted topology and the read pointer is ahead?
+    else if (readIdxCache_ > writeIdx && n_items > (readIdxCache_ - writeIdx)) {
+      // wait until the read clears enough
+      readIdxCache_ = readIdx_.load(std::memory_order_acquire);
+      while (readIdxCache_ > writeIdx && n_items > (readIdxCache_ - writeIdx)) {
+        readIdxCache_ = readIdx_.load(std::memory_order_acquire);
+      }
+    }
+
+    //if (nextWriteIdx == capacity_) {
+    //  nextWriteIdx = 0;
+    //}
+    //while (nextWriteIdx == readIdxCache_) {
+    //  readIdxCache_ = readIdx_.load(std::memory_order_acquire);
+    //}
+
+    auto placement_ptr = &slots_[writeIdx + kPadding];
+    // new (placement_ptr) T(std::forward<Args>(args)...);
+
+    return placement_ptr;
+    //std::cout << "SPSCQueue::emplace writeIdx=" << std::dec << writeIdx << " writeIdx+kPadding=" << writeIdx + kPadding << " placement_ptr=" << std::hex << placement_ptr << std::endl;
+  }
+
+  void allocate_store(size_t n_items) noexcept {
+    // assume the coord comes from allocate_n
+    // the coord really must be a unique_ptr of the current index
+    // i.e. coord.index == writeIdx_
+    // and this can be a fetch_add
+    writeIdx_.fetch_add(n_items, std::memory_order_release);
+  }
+
   template <typename... Args>
   void emplace(Args &&...args) noexcept(
       std::is_nothrow_constructible<T, Args &&...>::value) {

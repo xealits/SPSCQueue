@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
   }
 
   const size_t queueSize = 10000000;
-  const int64_t iters = 10000000;
+  const int64_t iters = 10; // 10000000;
 
 
   if (test_spscqueue) {
@@ -192,11 +192,17 @@ int main(int argc, char *argv[]) {
       //q.emplace(i);
       // TODO: pre-known size!
       size_t n_bytes = 24 + 2; // 2 is the netio header -- it should not be there
-      auto rawData_coord = q.allocate_n(n_bytes);
+      auto rawData_ptr = q.allocate_n(n_bytes);
+      // TODO the user has to set it manually:
+      rawData_ptr[0] = n_bytes + 1;
       // bools: randomise and big_endianness
-      if (fill_generated_data(rawData_coord.ptr, myFalse, myFalse, 10, 1) != n_bytes) throw std::runtime_error("wrong!");
+      #ifdef debug_logging
+      if (fill_generated_data(rawData_ptr, myFalse, myFalse, 10, 1) != n_bytes) throw std::runtime_error("wrong!");
+      #else
+      fill_generated_data(rawData_ptr, myFalse, myFalse, 10, 1);
+      #endif
       //if (debug_logging) for (unsigned ibyte=0; ibyte<n_bytes; ) print_FrontEndData(&fe_data[0]);
-      q.allocate_push(rawData_coord);
+      q.allocate_store(n_bytes+1);
     }
 
     t_consumer.join();
