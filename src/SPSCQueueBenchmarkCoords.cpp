@@ -33,7 +33,7 @@ SOFTWARE.
 #include <folly/ProducerConsumerQueue.h>
 #endif
 
-#define debug_logging 0
+//#define debug_logging 2
 #include "test_parsing.h"
 #define PARSE
 
@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
   }
 
   const size_t queueSize = 10000000;
-  const int64_t iters = 10; // 10000000;
+  const int64_t iters = 100; // 10000000;
 
 
   if (test_spscqueue) {
@@ -135,7 +135,7 @@ int main(int argc, char *argv[]) {
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
-    SPSCQueue<uint8_t> q(1024);
+    SPSCQueue<uint8_t> q(256);
     unsigned long long n_all_payload_bytes = 0;
 
     auto t_consumer = std::thread([&] {
@@ -173,7 +173,7 @@ int main(int argc, char *argv[]) {
         parse_data(&rawData_ptr[3], n_payload - 3, fe_data);
 
         // TODO: printout the packets to check?
-        #ifdef debug_logging
+        #if (debug_logging > 0)
           print_FrontEndData(fe_data);
         #endif
         #endif
@@ -191,18 +191,21 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < iters; ++i) {
       //q.emplace(i);
       // TODO: pre-known size!
-      size_t n_bytes = 24 + 2; // 2 is the netio header -- it should not be there
+      size_t n_bytes = 24 + 2 + 1;
+      // 2 is the netio header -- it should not be there
+      // 1 is the flat byte
       auto rawData_ptr = q.allocate_n(n_bytes);
       // TODO the user has to set it manually:
-      rawData_ptr[0] = n_bytes + 1;
+      rawData_ptr[0] = n_bytes;
       // bools: randomise and big_endianness
       #ifdef debug_logging
-      if (fill_generated_data(rawData_ptr, myFalse, myFalse, 10, 1) != n_bytes) throw std::runtime_error("wrong!");
+      if (fill_generated_data(&rawData_ptr[1], myFalse, myFalse, 10, 1) != n_bytes-1) throw std::runtime_error("wrong!");
       #else
       fill_generated_data(rawData_ptr, myFalse, myFalse, 10, 1);
       #endif
       //if (debug_logging) for (unsigned ibyte=0; ibyte<n_bytes; ) print_FrontEndData(&fe_data[0]);
-      q.allocate_store(n_bytes+1);
+      //q.allocate_store(n_bytes);
+      q.allocate_store();
     }
 
     t_consumer.join();

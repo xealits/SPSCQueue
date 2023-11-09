@@ -68,6 +68,8 @@ public:
       capacity_ = SIZE_MAX - 2 * kPadding;
     }
 
+    wrapCapacity_.load(capacity_);
+
 #if defined(__cpp_if_constexpr) && defined(__cpp_lib_void_t)
     if constexpr (has_allocate_at_least<Allocator>::value) {
       auto res = allocator_.allocate_at_least(capacity_ + 2 * kPadding);
@@ -103,7 +105,7 @@ public:
 
   T* allocate_n(size_t n_items) {
     auto writeIdx = writeIdx_.load(std::memory_order_relaxed);
-    n_items++; // it will need 1 item to save the number of following bytes
+    //n_items++; // it will need 1 item to save the number of following bytes
     // it's not const as there may be the case when writeIdx is shifted to 0
 
     if (n_items >= capacity_) {
@@ -111,6 +113,10 @@ public:
       //nDrops_++;
       //return nullptr;
     } // TODO: maybe modify to not throw?
+
+    //if (writeIdx >= capacity_) {
+    //  throw std::runtime_error("SPSCCoord::allocate_n overflow!");
+    //}
 
     // the case when it does not fit to the end of the buffer
     if (n_items > (capacity_ - writeIdx)) {
@@ -120,6 +126,8 @@ public:
         readIdxCache_ = readIdx_.load(std::memory_order_acquire);
       }
       writeIdx = 0;
+      //writeIdx_.store(0, std::memory_order_relaxed);
+      wrapCapacity_.load(capacity_ - n_items);
     }
     // what if it's an inverted topology and the read pointer is ahead?
     else if (readIdxCache_ > writeIdx && n_items > (readIdxCache_ - writeIdx)) {
@@ -140,16 +148,18 @@ public:
     auto placement_ptr = &slots_[writeIdx + kPadding];
     // new (placement_ptr) T(std::forward<Args>(args)...);
 
+    allocateWriteIdxCache_ = writeIdx+n_items;
     return placement_ptr;
     //std::cout << "SPSCQueue::emplace writeIdx=" << std::dec << writeIdx << " writeIdx+kPadding=" << writeIdx + kPadding << " placement_ptr=" << std::hex << placement_ptr << std::endl;
   }
 
-  void allocate_store(size_t n_items) noexcept {
+  void allocate_store() noexcept {
     // assume the coord comes from allocate_n
     // the coord really must be a unique_ptr of the current index
     // i.e. coord.index == writeIdx_
     // and this can be a fetch_add
-    writeIdx_.fetch_add(n_items, std::memory_order_release);
+    //writeIdx_.fetch_add(n_items, std::memory_order_release);
+    writeIdx_.store(allocateWriteIdxCache_, std::memory_order_release);
   }
 
   template <typename... Args>
@@ -243,16 +253,21 @@ public:
   }
 
   void allocate_pop_n(size_t n_items) noexcept {
-    auto const readIdx = readIdx_.load(std::memory_order_relaxed);
+    auto readIdx = readIdx_.load(std::memory_order_relaxed);
+    auto nextReadIdx = readIdx + n_items;
+    // TODO: the user has to use allocate_n which does the check if this fits
+    // in the case nextReadIdx can't fit, the allocate_n has rolled over to the beginning
+    // FIXME: no, this happens before, in front()
+    if (nextReadIdx >= capacity_) {
+      readIdx = 0;
+      nextReadIdx = n_items;
+    }
+
     if (writeIdxCache_ == readIdx)
       assert((writeIdxCache_ = writeIdx_.load(std::memory_order_acquire)) != readIdx &&
            "Can only call pop() after front() has returned a non-nullptr");
     //slots_[readIdx + kPadding].~T();
-    auto nextReadIdx = readIdx + n_items;
-    // TODO: the user has to use allocate_n which does the check if this fits
-    //if (nextReadIdx == capacity_) {
-      //nextReadIdx = 0;
-    //}
+
     readIdx_.store(nextReadIdx, std::memory_order_release);
   }
 
@@ -299,5 +314,9 @@ private:
   alignas(kCacheLineSize) size_t readIdxCache_ = 0;
   alignas(kCacheLineSize) std::atomic<size_t> readIdx_ = {0};
   alignas(kCacheLineSize) size_t writeIdxCache_ = 0;
+
+  alignas(kCacheLineSize) size_t wrapCapacity_ = {0}; // dynamic capacity size for the cases of allocate_n roll over
+
+  alignas(kCacheLineSize) size_t allocateWriteIdxCache_ = 0; // just to make the allocate logic work
 };
 } // namespace rigtorp
