@@ -35,7 +35,7 @@ SOFTWARE.
 
 //#define debug_logging 2
 #include "test_parsing.h"
-#define PARSE
+//#define PARSE
 
 bool test_spscqueue = false;
 bool test_boost     = false;
@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
   }
 
   const size_t queueSize = 10000000;
-  const int64_t iters = 100; // 10000000;
+  const int64_t iters = 10000000;
 
 
   if (test_spscqueue) {
@@ -135,7 +135,7 @@ int main(int argc, char *argv[]) {
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
-    SPSCQueue<uint8_t> q(256);
+    SPSCQueue<uint8_t> q(1024, 128);
     unsigned long long n_all_payload_bytes = 0;
 
     auto t_consumer = std::thread([&] {
