@@ -282,7 +282,7 @@ public:
     // in the case nextReadIdx can't fit, the allocate_n has rolled over to the beginning
     // FIXME: no, this happens before, in front()
     auto nextReadIdx = readIdx + n_items;
-    if (nextReadIdx >= capacityMargin_) {
+    if (nextReadIdx > capacityMargin_) { // "greater then" -- the same as in allocate_n
       //readIdx = 0;
       nextReadIdx = 0;
     }

@@ -33,7 +33,7 @@ SOFTWARE.
 #include <folly/ProducerConsumerQueue.h>
 #endif
 
-//#define debug_logging 2
+#define debug_logging 0
 #include "test_parsing.h"
 //#define PARSE
 
@@ -135,12 +135,13 @@ int main(int argc, char *argv[]) {
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
-    SPSCQueue<uint8_t> q(1024, 128);
+    SPSCQueue<uint8_t> q(4096, 128);
     unsigned long long n_all_payload_bytes = 0;
 
     auto t_consumer = std::thread([&] {
       pinThread(cpu1);
       
+      std::cout << "running the consumer thread" << std::endl;
       // output data
       struct FrontEndData fe_data[2];
       //FrontEndHit  fe_hits_array[max_n_abcs*max_n_clusters*2];
@@ -181,7 +182,10 @@ int main(int argc, char *argv[]) {
         n_all_payload_bytes += n_payload - 3; // account things
         //q.allocate_pop(*rawData_ptr);
         q.allocate_pop_n(n_payload);
+        //std::cout << "the consumer i " << i << std::endl;
       }
+
+      std::cout << "the consumer is done" << std::endl;
     });
 
     pinThread(cpu2);
