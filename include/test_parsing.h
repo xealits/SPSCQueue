@@ -60,6 +60,33 @@ struct FrontEndData {
 	FrontEndHit * fe_hits;
 };
 
+/// @brief  flat FE data format
+/// the first item = how many hits in the packet
+/// then follows the data header, with l0id etc
+/// and the hits
+typedef union {
+	struct __attribute__((packed)) {
+		uint8_t strips_pattern;
+		uint8_t address; // address, do not split the row and x
+		uint8_t abc_id;
+		uint8_t reserved;
+	} hit;
+
+	struct __attribute__((packed)) {
+		uint8_t flag; // 1 full byte
+		uint8_t l0id;
+		uint8_t bcid;
+		uint8_t reserved;
+	} header;
+
+	uint32_t n_hits;
+} FrontEndData_flat;
+
+typedef struct {
+	uint8_t l0id;
+	uint8_t reserved; // whatever flags & errors?
+} FrontEndDataStats;
+
 /*
  * a packet:
  * netio header | star data
