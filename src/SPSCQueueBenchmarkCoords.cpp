@@ -35,7 +35,10 @@ SOFTWARE.
 
 #define debug_logging 0
 #include "test_parsing.h"
-//#define PARSE
+#define PARSE
+
+#define MAX_CLUSTERS 1
+#define MAX_ABCs    10
 
 bool test_spscqueue = false;
 bool test_boost     = false;
@@ -68,7 +71,9 @@ int main(int argc, char *argv[]) {
   }
 
   const size_t queueSize = 10000000;
-  const int64_t iters = 10000000;
+  const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
+  const int64_t n_raw_packets = 10000;
+  const int64_t n_repeat      = 1000;
 
 
   if (test_spscqueue) {
@@ -145,7 +150,7 @@ int main(int argc, char *argv[]) {
       // output data
       struct FrontEndData fe_data[2];
       //FrontEndHit  fe_hits_array[max_n_abcs*max_n_clusters*2];
-      FrontEndHit  fe_hits_array[10*1*2];
+      FrontEndHit  fe_hits_array[MAX_ABCs*MAX_CLUSTERS*2];
       // set up the output pad
       fe_data[0].l0id = 0;
       fe_data[0].bcid = 0;
@@ -153,7 +158,7 @@ int main(int argc, char *argv[]) {
       fe_data[0].fe_hits = fe_hits_array;
 
 
-      for (int i = 0; i < iters; ++i) {
+      for (int i = 0; i < n_raw_packets*n_repeat; ++i) {
         while (!q.front())
           ;
         //if (*q.front() != i) {
@@ -163,15 +168,16 @@ int main(int argc, char *argv[]) {
         //uint8_t n_payload = 24; // rawData_ptr->ptr[1];
         auto rawData_ptr = q.front();
         uint8_t n_payload = rawData_ptr[0]; // the buffer the payload includes netio header
+        #if (debug_logging > 0)
+          std::cout << "new raw data n_payload=" << (unsigned) n_payload << "\n";
+        #endif
+
         #ifdef PARSE
         //parse_data;
-        //uint8_t elink_id  = rawData_ptr->ptr[0];
-        //n_payload = rawData_ptr->ptr[1];
-        uint8_t elink_id  = rawData_ptr[1];
-        //n_payload = rawData_ptr[2]; // must equeal to _ptr[0] - 3
+        //uint8_t elink_id  = rawData_ptr[1]; // not anymore! just raw_data
 
         //parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
-        parse_data(&rawData_ptr[3], n_payload - 3, fe_data);
+        parse_data(&rawData_ptr[1], n_payload, fe_data);
 
         // TODO: printout the packets to check?
         #if (debug_logging > 0)
@@ -179,9 +185,9 @@ int main(int argc, char *argv[]) {
         #endif
         #endif
 
-        n_all_payload_bytes += n_payload - 3; // account things
+        n_all_payload_bytes += n_payload; // account things
         //q.allocate_pop(*rawData_ptr);
-        q.allocate_pop_n(n_payload);
+        q.allocate_pop_n(n_payload+1); // + the flat size byte
         //std::cout << "the consumer i " << i << std::endl;
       }
 
@@ -190,26 +196,49 @@ int main(int argc, char *argv[]) {
 
     pinThread(cpu2);
 
-    auto start = std::chrono::steady_clock::now();
-    // producer:
-    for (int i = 0; i < iters; ++i) {
+    // generate the data in memory
+    const static long long unsigned n_max_raw_data_bytes = n_raw_packets * (2 + (2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2));
+    // 2=netio header + (2=header + N_ABCs*N_CLUSTERs*2bytes + 2=footer)
+    uint8_t raw_data[n_max_raw_data_bytes];
+    auto raw_data_ptr = &raw_data[0];
+
+    for (int i = 0; i < n_raw_packets; ++i) {
       //q.emplace(i);
       // TODO: pre-known size!
-      size_t n_bytes = 24 + 2 + 1;
-      // 2 is the netio header -- it should not be there
-      // 1 is the flat byte
-      auto rawData_ptr = q.allocate_n(n_bytes);
-      // TODO the user has to set it manually:
-      rawData_ptr[0] = n_bytes;
-      // bools: randomise and big_endianness
+      size_t n_bytes = (MAX_CLUSTERS*MAX_ABCs*2 + 2 + 2) + 2;
+      // the last 2 is the netio header -- it should not be there
+      // (and there used to be 1 for the flat size byte)
+
+      auto n_bytes_filled = fill_generated_data(raw_data_ptr, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs);
       #ifdef debug_logging
-      if (fill_generated_data(&rawData_ptr[1], myFalse, myFalse, 10, 1) != n_bytes-1) throw std::runtime_error("wrong!");
-      #else
-      fill_generated_data(rawData_ptr, myFalse, myFalse, 10, 1);
+      if (n_bytes_filled != n_bytes) throw std::runtime_error("wrong n_bytes_filled! " + std::to_string(n_bytes_filled) + " != " + std::to_string(n_bytes));
       #endif
-      //if (debug_logging) for (unsigned ibyte=0; ibyte<n_bytes; ) print_FrontEndData(&fe_data[0]);
-      //q.allocate_store(n_bytes);
-      q.allocate_store();
+      raw_data_ptr+=n_bytes;
+    }
+
+    auto start = std::chrono::steady_clock::now();
+
+    // producer pushes the raw data to the queue:
+    for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
+      raw_data_ptr = &raw_data[0];
+      for (int i = 0; i < n_raw_packets; ++i) {
+        //q.emplace(i);
+        // TODO: pre-known size!
+        uint8_t n_bytes  = raw_data_ptr[1];
+        #if debug_logging > 0
+        uint8_t elink_id = raw_data_ptr[0]; // not used here
+        std::cout << "push on elink=" << (unsigned) elink_id << " n_bytes=" << (unsigned) n_bytes << "\n";
+        #endif
+        // 2 is the netio header -- it should not be there
+        // 1 is the flat byte
+        auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
+        // TODO the user has to set it manually:
+        rawData_ptr[0] = n_bytes;
+        // copy the data into the queue
+        memcpy(&rawData_ptr[1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
+        q.allocate_store();
+        rawData_ptr += n_bytes+1;
+      }
     }
 
     t_consumer.join();
