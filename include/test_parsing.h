@@ -126,16 +126,20 @@ int random_int(int lower, int upper) {
 /// max size is when each ABC outputs 4 clusters + 2 bytes header and 2 bytes footer
 /// max_n_abcs * max_n_clusters * 2 + (2) + (2)
 /// and netio header = 2 bytes
-unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool big_endianness, unsigned max_n_abcs, unsigned max_n_clusters) {
+unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool big_endianness, unsigned max_n_abcs, unsigned max_n_clusters, myBool with_netio_header) {
 	uint8_t elink_id = 0;
 	unsigned n_bytes_star_data = 0; // to be calculated
 
-	raw_data[0] = elink_id;
-	//raw_data[1] = n_bytes_star_data; // TODO don't forget to fill
-	unsigned n_bytes_netio_header = 2;
+	unsigned n_bytes_netio_header=0;
+	if (with_netio_header) {
+	  n_bytes_netio_header = 2;
+	  raw_data[0] = elink_id;
+	  //raw_data[1] = n_bytes_star_data; // TODO don't forget to fill
+	}
 
 	// star data
-	unsigned cur_i = 2;
+	unsigned cur_i = 0;
+	if (with_netio_header) cur_i=2;
 	uint8_t flag = 0;
 	uint8_t l0id = 0xC;
 	uint8_t bcid = 0x3;
@@ -187,7 +191,9 @@ unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool
 	n_bytes_star_data += 2;
 
 	if (n_bytes_star_data > 255) printf("fill_generated_data: ERROR n_bytes_star_data > 255: %d\n", n_bytes_star_data);
-	raw_data[1] = n_bytes_star_data & 0xFF;
+	
+	if (with_netio_header) // fill the netio payload byte
+	  raw_data[1] = n_bytes_star_data & 0xFF;
 
 	if (debug_logging>1) {
       printf("fill_generated_data raw bytes:");

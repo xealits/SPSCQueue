@@ -35,7 +35,10 @@ SOFTWARE.
 
 #define debug_logging 0
 #include "test_parsing.h"
+
 #define PARSE
+
+#define MEMCPY 2
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -197,7 +200,8 @@ int main(int argc, char *argv[]) {
     pinThread(cpu2);
 
     // generate the data in memory
-    const static long long unsigned n_max_raw_data_bytes = n_raw_packets * (2 + (2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2));
+    const static long long unsigned a_packet_size = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2;
+    const static long long unsigned n_max_raw_data_bytes = n_raw_packets * (2 + a_packet_size); // with the netio header
     // 2=netio header + (2=header + N_ABCs*N_CLUSTERs*2bytes + 2=footer)
     uint8_t raw_data[n_max_raw_data_bytes];
     auto raw_data_ptr = &raw_data[0];
@@ -205,16 +209,25 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < n_raw_packets; ++i) {
       //q.emplace(i);
       // TODO: pre-known size!
-      size_t n_bytes = (MAX_CLUSTERS*MAX_ABCs*2 + 2 + 2) + 2;
+      myBool with_netio_header = myFalse;
+      #ifdef MEMCPY
+      with_netio_header = myTrue;
+      #endif
+      size_t n_bytes = (MAX_CLUSTERS*MAX_ABCs*2 + 2 + 2) + (with_netio_header? 2 : 0);
       // the last 2 is the netio header -- it should not be there
       // (and there used to be 1 for the flat size byte)
 
-      auto n_bytes_filled = fill_generated_data(raw_data_ptr, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs);
+      auto n_bytes_filled = fill_generated_data(raw_data_ptr, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, with_netio_header);
       #ifdef debug_logging
       if (n_bytes_filled != n_bytes) throw std::runtime_error("wrong n_bytes_filled! " + std::to_string(n_bytes_filled) + " != " + std::to_string(n_bytes));
       #endif
       raw_data_ptr+=n_bytes;
     }
+
+    // a single packet pad
+    uint8_t raw_a_packet[a_packet_size];
+    auto n_bytes_filled = fill_generated_data(raw_a_packet, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
+    if (n_bytes_filled != a_packet_size) throw std::runtime_error("a_packet wrong n_bytes_filled! " + std::to_string(n_bytes_filled) + " != " + std::to_string(a_packet_size));
 
     auto start = std::chrono::steady_clock::now();
 
@@ -223,19 +236,42 @@ int main(int argc, char *argv[]) {
       raw_data_ptr = &raw_data[0];
       for (int i = 0; i < n_raw_packets; ++i) {
         //q.emplace(i);
-        // TODO: pre-known size!
+
+        // copy the data into the queue
+        #ifdef MEMCPY
         uint8_t n_bytes  = raw_data_ptr[1];
+
         #if debug_logging > 0
         uint8_t elink_id = raw_data_ptr[0]; // not used here
         std::cout << "push on elink=" << (unsigned) elink_id << " n_bytes=" << (unsigned) n_bytes << "\n";
         #endif
+
         // 2 is the netio header -- it should not be there
         // 1 is the flat byte
         auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
         // TODO the user has to set it manually:
         rawData_ptr[0] = n_bytes;
-        // copy the data into the queue
+
+        #if MEMCPY > 2
+        
+        memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
+
+        #else
         memcpy(&rawData_ptr[1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
+        #endif
+
+        #else
+
+        uint8_t n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
+
+        auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
+        rawData_ptr[0] = n_bytes;
+        auto n_bytes_filled = fill_generated_data(&rawData_ptr[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
+        #if debug_logging > 0
+        std::cout << "push directly to the queue n_bytes_filled=" << n_bytes_filled << "\n";
+        #endif
+        #endif
+
         q.allocate_store();
         rawData_ptr += n_bytes+1;
       }
