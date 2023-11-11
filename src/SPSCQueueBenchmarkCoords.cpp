@@ -38,7 +38,7 @@ SOFTWARE.
 
 #define PARSE
 
-#define MEMCPY 2
+//#define MEMCPY 2
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
 
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
-  const int64_t n_raw_packets = 10000;
+  const int64_t n_raw_packets = 100000;
   const int64_t n_repeat      = 1000;
 
 
@@ -143,7 +143,7 @@ int main(int argc, char *argv[]) {
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
-    SPSCQueue<uint8_t> q(4096, 128);
+    SPSCQueue<uint8_t> q(1024, 128);
     unsigned long long n_all_payload_bytes = 0;
 
     auto t_consumer = std::thread([&] {
@@ -199,6 +199,7 @@ int main(int argc, char *argv[]) {
 
     pinThread(cpu2);
 
+    auto start_setup = std::chrono::steady_clock::now();
     // generate the data in memory
     const static long long unsigned a_packet_size = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2;
     const static long long unsigned n_max_raw_data_bytes = n_raw_packets * (2 + a_packet_size); // with the netio header
@@ -229,6 +230,10 @@ int main(int argc, char *argv[]) {
     auto n_bytes_filled = fill_generated_data(raw_a_packet, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
     if (n_bytes_filled != a_packet_size) throw std::runtime_error("a_packet wrong n_bytes_filled! " + std::to_string(n_bytes_filled) + " != " + std::to_string(a_packet_size));
 
+    auto stop_setup = std::chrono::steady_clock::now();
+
+    std::cout << "setup time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop_setup - start_setup).count() << " ms" << std::endl;
+
     auto start = std::chrono::steady_clock::now();
 
     // producer pushes the raw data to the queue:
@@ -252,7 +257,7 @@ int main(int argc, char *argv[]) {
         // TODO the user has to set it manually:
         rawData_ptr[0] = n_bytes;
 
-        #if MEMCPY > 2
+        #if MEMCPY > 0
         
         memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
 
@@ -282,7 +287,7 @@ int main(int argc, char *argv[]) {
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 
-    std::cout << iters * 1000000 /
+    std::cout << n_repeat * n_raw_packets * 1000000 /
                      std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
                                                                           start)
                          .count()
