@@ -33,6 +33,9 @@ SOFTWARE.
 #include <folly/ProducerConsumerQueue.h>
 #endif
 
+bool test_boost     = false;
+bool test_rtt       = false;
+
 void pinThread(int cpu) {
   if (cpu < 0) {
     return;
@@ -60,7 +63,7 @@ int main(int argc, char *argv[]) {
     cpu2 = std::stoi(argv[2]);
   }
 
-  const size_t queueSize = 10000000;
+  const size_t queueSize = 10000; //10000000;
   const int64_t iters = 10000000;
 
   std::cout << "SPSCQueue:" << std::endl;
@@ -94,7 +97,7 @@ int main(int argc, char *argv[]) {
               << " ops/ms" << std::endl;
   }
 
-  {
+  if (test_rtt) {
     SPSCQueue<int> q1(queueSize), q2(queueSize);
     auto t = std::thread([&] {
       pinThread(cpu1);
@@ -125,8 +128,8 @@ int main(int argc, char *argv[]) {
   }
 
 #if __has_include(<boost/lockfree/spsc_queue.hpp> )
+  if (test_boost) {
   std::cout << "boost::lockfree::spsc:" << std::endl;
-  {
     boost::lockfree::spsc_queue<int> q(queueSize);
     auto t = std::thread([&] {
       pinThread(cpu1);
@@ -156,7 +159,7 @@ int main(int argc, char *argv[]) {
               << " ops/ms" << std::endl;
   }
 
-  {
+  if (test_boost) {
     boost::lockfree::spsc_queue<int> q1(queueSize), q2(queueSize);
     auto t = std::thread([&] {
       pinThread(cpu1);

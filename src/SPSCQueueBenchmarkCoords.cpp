@@ -38,7 +38,7 @@ SOFTWARE.
 
 #define PARSE
 
-//#define MEMCPY 2
+#define MEMCPY 0
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -143,9 +143,11 @@ int main(int argc, char *argv[]) {
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
-    SPSCQueue<uint8_t> q(1024, 128);
+    SPSCQueue<uint8_t> q(3072, 128);
     unsigned long long n_all_payload_bytes = 0;
 
+/*
+*/
     auto t_consumer = std::thread([&] {
       pinThread(cpu1);
       
@@ -205,7 +207,10 @@ int main(int argc, char *argv[]) {
     const static long long unsigned n_max_raw_data_bytes = n_raw_packets * (2 + a_packet_size); // with the netio header
     // 2=netio header + (2=header + N_ABCs*N_CLUSTERs*2bytes + 2=footer)
     uint8_t raw_data[n_max_raw_data_bytes];
+    
     auto raw_data_ptr = &raw_data[0];
+    //for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
+    //}
 
     for (int i = 0; i < n_raw_packets; ++i) {
       //q.emplace(i);
@@ -236,6 +241,8 @@ int main(int argc, char *argv[]) {
 
     auto start = std::chrono::steady_clock::now();
 
+/*
+*/
     // producer pushes the raw data to the queue:
     for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
       raw_data_ptr = &raw_data[0];
@@ -281,8 +288,8 @@ int main(int argc, char *argv[]) {
         rawData_ptr += n_bytes+1;
       }
     }
-
     t_consumer.join();
+
     auto stop = std::chrono::steady_clock::now();
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
