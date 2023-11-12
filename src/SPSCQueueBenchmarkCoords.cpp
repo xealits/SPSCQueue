@@ -38,7 +38,7 @@ SOFTWARE.
 
 #define PARSE
 
-#define MEMCPY 0
+//#define MEMCPY 0
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -143,8 +143,10 @@ int main(int argc, char *argv[]) {
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
-    SPSCQueue<uint8_t> q(3072, 128);
-    unsigned long long n_all_payload_bytes = 0;
+    SPSCQueue<uint8_t> q(1024*16, 128);
+    static constexpr size_t kCacheLineSize = 64;
+    alignas(kCacheLineSize) unsigned long long n_all_payload_bytes = 0;
+    alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
 
 /*
 */
@@ -173,6 +175,7 @@ int main(int argc, char *argv[]) {
         //uint8_t n_payload = 24; // rawData_ptr->ptr[1];
         auto rawData_ptr = q.front();
         uint8_t n_payload = rawData_ptr[0]; // the buffer the payload includes netio header
+
         #if (debug_logging > 0)
           std::cout << "new raw data n_payload=" << (unsigned) n_payload << "\n";
         #endif
@@ -181,8 +184,9 @@ int main(int argc, char *argv[]) {
         //parse_data;
         //uint8_t elink_id  = rawData_ptr[1]; // not anymore! just raw_data
 
-        //parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
-        parse_data(&rawData_ptr[1], n_payload, fe_data);
+        ////parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
+        ////unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
+        //all_res += parse_data(&rawData_ptr[1], n_payload);
 
         // TODO: printout the packets to check?
         #if (debug_logging > 0)
@@ -291,6 +295,8 @@ int main(int argc, char *argv[]) {
     t_consumer.join();
 
     auto stop = std::chrono::steady_clock::now();
+
+    std::cout << "all res =" << all_res << std::endl;
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 

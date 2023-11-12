@@ -215,7 +215,9 @@ void print_FrontEndData(struct FrontEndData* fe_data) {
 	printf("\n");
 }
 
-extern inline void parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct FrontEndData* out_data) {
+//extern inline void parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct FrontEndData* out_data)
+extern inline unsigned parse_data(uint8_t* raw_data, uint8_t n_data_bytes)
+{
 	// basic checks
 	// header 2 bytes
 	/* endianness
@@ -232,7 +234,7 @@ extern inline void parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct Fr
 
 	if (n_data_bytes<6) {
 		printf("parse_data: ERROR the packet is empty or contains 1 byte for clusters: %d (-2-2)\n", n_data_bytes);
-		return;
+		return 0;
 	}
 
 	//
@@ -243,7 +245,7 @@ extern inline void parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct Fr
 	//uint8_t typ = (header & 0xf0) >> (4);
 	if (typ != TYP_LP) {
 		printf("parse_data: ERROR header is not TYP_LP %d\n", raw_data[0]);
-		return;
+		return 0;
 	}
 
 	uint8_t flag = (header & 0x800) >> (3+8);
@@ -255,26 +257,29 @@ extern inline void parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct Fr
 	if (footer != 0xed6f)
 	{
 		printf("parse_data: ERROR footer is not 0x6f ed : 0x%x 0x%x\n", raw_data[n_data_bytes-2], raw_data[n_data_bytes-1]);
-		return;
+		return 0;
 	}
 
 	uint8_t n_cluster_bytes = n_data_bytes - 2 - 2;
 	// must be divisible by 2
 	if (n_cluster_bytes & 0x1) {
 		printf("parse_data: ERROR odd number of cluster bytes: %d\n", n_cluster_bytes);
-		return;
+		return 0;
 	}
 	uint8_t n_clusters = n_cluster_bytes >> 1;
 
 	uint16_t* cl_array = ((uint16_t*) raw_data) + 1;
 	//uint16_t cl = *(uint16_t*) (&raw_data[2 + n_cluster*2 + 0]);
 
+/*
 	out_data->flag = flag;
 	out_data->l0id = l0id;
 	out_data->bcid = bcid;
 	out_data->n_hits = n_clusters;
+*/
 
-	FrontEndHit * fe_hits = out_data->fe_hits;
+	unsigned res = 0;
+	//FrontEndHit * fe_hits = out_data->fe_hits;
 	// clusters
 	// here 1 cluster = 1 hit, the strips pattern is copied
 	//for (uint8_t n_cluster=0; n_cluster<n_clusters; n_cluster++)
@@ -321,10 +326,13 @@ extern inline void parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct Fr
 		//fe_hits[n_cluster].bits = abc_id | row | x | strips_pattern;
 		//printf("parse_data: cl %x -> %x %x %x\n", cl, abc_id, address, strips_pattern);
 
-		// or just bit fields:
-		fe_hits[n_cluster].bits = cl_array[n_cluster];
-		//printf("parse_data: cl %x -> %x %x %x %x\n", cl_array[n_cluster], fe_hits[n_cluster].fields.abc_id, fe_hits[n_cluster].fields.row, fe_hits[n_cluster].fields.x, fe_hits[n_cluster].fields.strips_pattern);
+		//// or just bit fields:
+		//fe_hits[n_cluster].bits = cl_array[n_cluster];
+		////printf("parse_data: cl %x -> %x %x %x %x\n", cl_array[n_cluster], fe_hits[n_cluster].fields.abc_id, fe_hits[n_cluster].fields.row, fe_hits[n_cluster].fields.x, fe_hits[n_cluster].fields.strips_pattern);
+	    res += cl_array[n_cluster];
 	}
+
+	return res;
 }
 
 void parse_data_2(uint8_t* raw_data, uint8_t n_data_bytes, uint8_t n_data_bytes_2, struct FrontEndData* out_data) {

@@ -311,7 +311,7 @@ private:
   static constexpr size_t kCacheLineSize =
       std::hardware_destructive_interference_size;
 #else
-  static constexpr size_t kCacheLineSize = 64;
+  static constexpr size_t kCacheLineSize = 64; // getconf LEVEL1_DCACHE_LINESIZE does show 64
 #endif
 
   // Padding to avoid false sharing between slots_ and adjacent allocations

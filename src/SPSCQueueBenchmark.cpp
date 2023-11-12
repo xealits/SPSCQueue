@@ -63,8 +63,8 @@ int main(int argc, char *argv[]) {
     cpu2 = std::stoi(argv[2]);
   }
 
-  const size_t queueSize = 10000; //10000000;
-  const int64_t iters = 10000000;
+  const size_t queueSize = 1000; //10000000; //1000;
+  const int64_t iters = 1000000000;
 
   std::cout << "SPSCQueue:" << std::endl;
 
@@ -90,10 +90,11 @@ int main(int argc, char *argv[]) {
     }
     t.join();
     auto stop = std::chrono::steady_clock::now();
-    std::cout << iters * 1000000 /
-                     std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
+    auto time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
                                                                           start)
-                         .count()
+                         .count();
+    std::cout << time_ns / 1000000 << "ms" << std::endl;
+    std::cout << iters * 1000000 / time_ns
               << " ops/ms" << std::endl;
   }
 
