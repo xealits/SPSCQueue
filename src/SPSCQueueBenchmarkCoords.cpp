@@ -25,6 +25,9 @@ SOFTWARE.
 #include <rigtorp/SPSCQueue.h>
 #include <thread>
 
+#include <sys/mman.h>
+
+
 #if __has_include(<boost/lockfree/spsc_queue.hpp> )
 #include <boost/lockfree/spsc_queue.hpp>
 #endif
@@ -59,6 +62,32 @@ void pinThread(int cpu) {
     exit(1);
   }
 }
+
+
+template <typename T> struct Allocator {
+  using value_type = T;
+
+  struct AllocationResult {
+    T *ptr;
+    size_t count;
+  };
+
+  size_t roundup(size_t n) { return (((n - 1) >> 21) + 1) << 21; }
+
+  AllocationResult allocate_at_least(size_t n) {
+    size_t count = roundup(sizeof(T) * n);
+    auto p = static_cast<T *>(mmap(nullptr, count, PROT_READ | PROT_WRITE,
+                                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+                                   -1, 0));
+    if (p == MAP_FAILED) {
+      throw std::bad_alloc();
+    }
+    return {p, count / sizeof(T)};
+  }
+
+  void deallocate(T *p, size_t n) { munmap(p, roundup(sizeof(T) * n)); }
+};
+
 
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
@@ -143,7 +172,8 @@ int main(int argc, char *argv[]) {
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
-    SPSCQueue<uint8_t> q(1024*16, 128);
+    //SPSCQueue<uint8_t, Allocator<uint8_t>> q(1024*1, 128); // huge pages allocator does not work: what():  std::bad_alloc
+    SPSCQueue<uint8_t> q(1024*1, 128);
     static constexpr size_t kCacheLineSize = 64;
     alignas(kCacheLineSize) unsigned long long n_all_payload_bytes = 0;
     alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
