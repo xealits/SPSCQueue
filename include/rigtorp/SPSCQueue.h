@@ -27,6 +27,7 @@ SOFTWARE.
 #include <cstddef>
 #include <memory> // std::allocator
 #include <new>    // std::hardware_destructive_interference_size
+#include <condition_variable>
 #include <stdexcept>
 #include <type_traits> // std::enable_if, std::is_*_constructible
 
@@ -152,7 +153,7 @@ public:
       allocateNextWriteIdxCache_ = 0;
     }
 
-    // what if it's an inverted topology and the read pointer is ahead?
+    // what if it's an inverted topology, the read pointer is ahead, and the queue is full?
     // the space must be cleared before the user can use it
     //if (readIdxCache_ >= writeIdx && n_items > (readIdxCache_ - writeIdx)) {
     //  // wait until the read clears enough
@@ -189,7 +190,10 @@ public:
     //while (allocateNextWriteIdxCache_ == readIdxCache_) {
     //  readIdxCache_ = readIdx_.load(std::memory_order_acquire);
     //}
-    writeIdx_.store(allocateNextWriteIdxCache_, std::memory_order_release);
+    queueMutex.lock();
+    writeIdx_.store(allocateNextWriteIdxCache_, std::memory_order_release); // TODO: very redundant
+    queueMutex.unlock();
+    cvNotEmpty.notify_all();
   }
 
   template <typename... Args>
@@ -254,6 +258,13 @@ public:
   RIGTORP_NODISCARD bool
   try_push(P &&v) noexcept(std::is_nothrow_constructible<T, P &&>::value) {
     return try_emplace(std::forward<P>(v));
+  }
+
+  /// instead of busy-waiting on front(), wait on this
+  void waitNotEmptyOrDone() {
+    std::unique_lock<std::mutex> lk(queueMutex);
+    cvNotEmpty.wait(lk,
+                    [&] { return doneFlag || !empty(); } ); // rawEmpty -> atomics empty -- think/measure the overheads etc
   }
 
   RIGTORP_NODISCARD T *front() noexcept {
@@ -347,6 +358,11 @@ private:
   alignas(kCacheLineSize) size_t readIdxCache_ = 0;
   alignas(kCacheLineSize) std::atomic<size_t> readIdx_ = {0};
   alignas(kCacheLineSize) size_t writeIdxCache_ = 0;
+
+  // CV control
+  std::condition_variable cvNotEmpty;
+  std::mutex queueMutex;
+  std::atomic<bool> doneFlag;
 
   //alignas(kCacheLineSize) size_t wrapCapacity_ = {0}; // dynamic capacity size for the cases of allocate_n roll over
 

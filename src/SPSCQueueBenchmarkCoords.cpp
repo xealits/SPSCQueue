@@ -196,8 +196,10 @@ int main(int argc, char *argv[]) {
 
 
       for (int i = 0; i < n_raw_packets*n_repeat; ++i) {
-        while (!q.front())
-          ;
+        q.waitNotEmptyOrDone(); // this is a blocking call
+        // it guarantees that front() returns something and the following busy loop won't fire
+        //while (!q.front())
+        //  ;
         //if (*q.front() != i) {
         //  throw std::runtime_error("");
         //}
