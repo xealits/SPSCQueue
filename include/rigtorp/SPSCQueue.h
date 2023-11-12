@@ -94,8 +94,10 @@ public:
           allocator_, capacity_ + 2 * kPadding);
     }
 #else
-    slots_ = std::allocator_traits<Allocator>::allocate(
-        allocator_, capacity_ + 2 * kPadding);
+    //slots_ = std::allocator_traits<Allocator>::allocate(
+    //    allocator_, capacity_ + 2 * kPadding);
+    slots_ = std::aligned_alloc( kPadding /*alignment*/,
+        capacity_ + 2 * kPadding /*size*/);
 #endif
 
     static_assert(alignof(SPSCQueue<T>) == kCacheLineSize, "");
@@ -124,7 +126,7 @@ public:
     //n_items++; // it will need 1 item to save the number of following bytes
     // it's not const as there may be the case when writeIdx is shifted to 0
 
-    if (n_items >= maxAllocationLength_) {
+    if (n_items > maxAllocationLength_) {
       throw std::runtime_error("SPSCCoord::allocate_n requested too large size: " + std::to_string(n_items) + " > " + std::to_string(maxAllocationLength_));
       //nDrops_++;
       //return nullptr;

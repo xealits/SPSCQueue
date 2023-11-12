@@ -41,6 +41,8 @@ SOFTWARE.
 
 #define PARSE
 
+#define RAWDATA_SLOT 64 // bytes
+
 //#define MEMCPY 0
 
 #define MAX_CLUSTERS 1
@@ -105,75 +107,14 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
   const int64_t n_raw_packets = 100000;
-  const int64_t n_repeat      = 1000;
+  const int64_t n_repeat      =   1000;
 
-
-  if (test_spscqueue) {
-    std::cout << "SPSCQueue:" << std::endl;
-    SPSCQueue<int> q(queueSize);
-    auto t = std::thread([&] {
-      pinThread(cpu1);
-      for (int i = 0; i < iters; ++i) {
-        while (!q.front())
-          ;
-        if (*q.front() != i) {
-          throw std::runtime_error("");
-        }
-        q.pop();
-      }
-    });
-
-    pinThread(cpu2);
-
-    auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < iters; ++i) {
-      q.emplace(i);
-    }
-    t.join();
-    auto stop = std::chrono::steady_clock::now();
-    std::cout << iters * 1000000 /
-                     std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
-                                                                          start)
-                         .count()
-              << " ops/ms" << std::endl;
-  }
-
-  if (test_spscqueue) {
-    std::cout << "SPSCQueue RTT:" << std::endl;
-    SPSCQueue<int> q1(queueSize), q2(queueSize);
-    auto t = std::thread([&] {
-      pinThread(cpu1);
-      for (int i = 0; i < iters; ++i) {
-        while (!q1.front())
-          ;
-        q2.emplace(*q1.front());
-        q1.pop();
-      }
-    });
-
-    pinThread(cpu2);
-
-    auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < iters; ++i) {
-      q1.emplace(i);
-      while (!q2.front())
-        ;
-      q2.pop();
-    }
-    auto stop = std::chrono::steady_clock::now();
-    t.join();
-    std::cout << std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
-                                                                      start)
-                         .count() /
-                     iters
-              << " ns RTT" << std::endl;
-  }
 
   std::cout << "SPSCQueueCoords:" << std::endl;
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
     //SPSCQueue<uint8_t, Allocator<uint8_t>> q(1024*1, 128); // huge pages allocator does not work: what():  std::bad_alloc
-    SPSCQueue<uint8_t> q(1024*3, 128);
+    SPSCQueue<std::array<uint8_t, RAWDATA_SLOT>> q(16*3);
     static constexpr size_t kCacheLineSize = 64;
     alignas(kCacheLineSize) unsigned long long n_all_payload_bytes = 0;
     alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
@@ -203,8 +144,9 @@ int main(int argc, char *argv[]) {
         //}
         //auto rawData_ptr = q.allocate_front();
         //uint8_t n_payload = 24; // rawData_ptr->ptr[1];
-        auto rawData_ptr = q.front();
-        uint8_t n_payload = rawData_ptr[0]; // the buffer the payload includes netio header
+        //uint8_t[RAWDATA_SLOT]* rawData_ptr = q.front();
+        std::array<uint8_t, RAWDATA_SLOT>* rawData_ptr = q.front();
+        uint8_t n_payload = (*rawData_ptr)[0]; // the buffer the payload includes netio header
 
         #if (debug_logging > 0)
           std::cout << "new raw data n_payload=" << (unsigned) n_payload << "\n";
@@ -214,9 +156,9 @@ int main(int argc, char *argv[]) {
         //parse_data;
         //uint8_t elink_id  = rawData_ptr[1]; // not anymore! just raw_data
 
-        ////parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
-        ////unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
-        //all_res += parse_data(&rawData_ptr[1], n_payload);
+        //parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
+        //unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
+        all_res += parse_data(&(*rawData_ptr)[1], n_payload, fe_data);
 
         // TODO: printout the packets to check?
         #if (debug_logging > 0)
@@ -226,7 +168,8 @@ int main(int argc, char *argv[]) {
 
         n_all_payload_bytes += n_payload; // account things
         //q.allocate_pop(*rawData_ptr);
-        q.allocate_pop_n(n_payload+1); // + the flat size byte
+        //q.allocate_pop_n(n_payload+1); // + the flat size byte
+        q.pop();
         //std::cout << "the consumer i " << i << std::endl;
       }
 
@@ -309,20 +252,30 @@ int main(int argc, char *argv[]) {
         #else
 
         uint8_t n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
+        if (n_bytes>=RAWDATA_SLOT) throw std::runtime_error("too many bytes to store in rawData queue! " + std::to_string(n_bytes));
 
-        //auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
-        auto allocation = q.allocate_n(n_bytes+1); // +1 flat size byte
-        auto rawData_ptr = allocation.ptr;
-        rawData_ptr[0] = n_bytes;
-        auto n_bytes_filled = fill_generated_data(&rawData_ptr[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
+        ////auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
+        //auto allocation = q.allocate_n(n_bytes+1); // +1 flat size byte
+        //auto rawData_ptr = allocation.ptr;
+        //rawData_ptr[0] = n_bytes;
+        //auto n_bytes_filled = fill_generated_data(&rawData_ptr[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
+        //auto allocation_shift = allocation.allocateNextWriteIdxCache_;
+        //q.allocate_store(allocation_shift);
+        //rawData_ptr += n_bytes+1;
+
+        auto allocation = q.allocate_n(1); // allocate 1 RAWDATA_SLOT array
+        auto& rawData_array = (*allocation.ptr);
+        rawData_array[0] = n_bytes;
+        auto n_bytes_filled = fill_generated_data(&rawData_array[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
+        auto allocation_shift = allocation.allocateNextWriteIdxCache_; // must == 1
+        //if (allocation_shift!=1) throw std::runtime_error("allocation shift != 1");
+        // no, that's the new index, not a shift
+        q.allocate_store(allocation_shift);
+
         #if debug_logging > 0
         std::cout << "push directly to the queue n_bytes_filled=" << n_bytes_filled << "\n";
         #endif
         #endif
-
-        auto allocation_shift = allocation.allocateNextWriteIdxCache_;
-        q.allocate_store(allocation_shift);
-        rawData_ptr += n_bytes+1;
       }
     }
     t_consumer.join();

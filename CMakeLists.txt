@@ -33,6 +33,9 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 
         add_executable(SPSCQueueBenchmarkCoords src/SPSCQueueBenchmarkCoords.cpp)
         target_link_libraries(SPSCQueueBenchmarkCoords SPSCQueue Threads::Threads)
+
+        add_executable(SPSCQueueBenchmarkCoordSlots src/SPSCQueueBenchmarkCoordSlots.cpp)
+        target_link_libraries(SPSCQueueBenchmarkCoordSlots SPSCQueue Threads::Threads)
     endif()
 
     if (((CMAKE_CXX_COMPILER_ID MATCHES "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 7.0)

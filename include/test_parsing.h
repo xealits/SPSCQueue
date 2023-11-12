@@ -161,8 +161,8 @@ unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool
 		}
 
 		for (unsigned n_cluster = 0; n_cluster<n_clusters_from_cur_ABC; n_cluster++) {
-			uint8_t strips_address = 127;
-			uint8_t strips_pattern = 3;
+			uint8_t strips_address = 111;
+			uint8_t strips_pattern = 2;
 			if (randomize_packets) {
 				strips_address = random_int(0, 255); // the range is inclusive
 				strips_pattern = random_int(0, 7);
@@ -215,8 +215,8 @@ void print_FrontEndData(struct FrontEndData* fe_data) {
 	printf("\n");
 }
 
-//extern inline void parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct FrontEndData* out_data)
-extern inline unsigned parse_data(uint8_t* raw_data, uint8_t n_data_bytes)
+extern inline unsigned parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struct FrontEndData* out_data)
+//extern inline unsigned parse_data(uint8_t* raw_data, uint8_t n_data_bytes)
 {
 	// basic checks
 	// header 2 bytes
@@ -271,15 +271,16 @@ extern inline unsigned parse_data(uint8_t* raw_data, uint8_t n_data_bytes)
 	uint16_t* cl_array = ((uint16_t*) raw_data) + 1;
 	//uint16_t cl = *(uint16_t*) (&raw_data[2 + n_cluster*2 + 0]);
 
-/*
 	out_data->flag = flag;
 	out_data->l0id = l0id;
 	out_data->bcid = bcid;
 	out_data->n_hits = n_clusters;
+/*
 */
 
-	unsigned res = 0;
-	//FrontEndHit * fe_hits = out_data->fe_hits;
+	//unsigned res = 0;
+	FrontEndHit * fe_hits = out_data->fe_hits;
+
 	// clusters
 	// here 1 cluster = 1 hit, the strips pattern is copied
 	//for (uint8_t n_cluster=0; n_cluster<n_clusters; n_cluster++)
@@ -326,13 +327,13 @@ extern inline unsigned parse_data(uint8_t* raw_data, uint8_t n_data_bytes)
 		//fe_hits[n_cluster].bits = abc_id | row | x | strips_pattern;
 		//printf("parse_data: cl %x -> %x %x %x\n", cl, abc_id, address, strips_pattern);
 
-		//// or just bit fields:
-		//fe_hits[n_cluster].bits = cl_array[n_cluster];
-		////printf("parse_data: cl %x -> %x %x %x %x\n", cl_array[n_cluster], fe_hits[n_cluster].fields.abc_id, fe_hits[n_cluster].fields.row, fe_hits[n_cluster].fields.x, fe_hits[n_cluster].fields.strips_pattern);
-	    res += cl_array[n_cluster];
+		// or just bit fields:
+		fe_hits[n_cluster].bits = cl_array[n_cluster];
+		//printf("parse_data: cl %x -> %x %x %x %x\n", cl_array[n_cluster], fe_hits[n_cluster].fields.abc_id, fe_hits[n_cluster].fields.row, fe_hits[n_cluster].fields.x, fe_hits[n_cluster].fields.strips_pattern);
+	    //res += cl_array[n_cluster];
 	}
 
-	return res;
+	return 0; //res;
 }
 
 void parse_data_2(uint8_t* raw_data, uint8_t n_data_bytes, uint8_t n_data_bytes_2, struct FrontEndData* out_data) {
