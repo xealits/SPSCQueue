@@ -263,14 +263,17 @@ int main(int argc, char *argv[]) {
         //q.allocate_store(allocation_shift);
         //rawData_ptr += n_bytes+1;
 
-        auto allocation = q.allocate_n(1); // allocate 1 RAWDATA_SLOT array
-        auto& rawData_array = (*allocation.ptr);
+        //auto allocation = q.allocate_n(1); // allocate 1 RAWDATA_SLOT array
+        //auto& rawData_array = (*allocation.ptr);
+        auto& rawData_array = *q.allocate_n(1); // allocate 1 RAWDATA_SLOT array
         rawData_array[0] = n_bytes;
         auto n_bytes_filled = fill_generated_data(&rawData_array[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
-        auto allocation_shift = allocation.allocateNextWriteIdxCache_; // must == 1
+
         //if (allocation_shift!=1) throw std::runtime_error("allocation shift != 1");
         // no, that's the new index, not a shift
-        q.allocate_store(allocation_shift);
+        //auto allocation_shift = allocation.allocateNextWriteIdxCache_; // must == 1
+        //q.allocate_store(allocation_shift);
+        q.allocate_store();
 
         #if debug_logging > 0
         std::cout << "push directly to the queue n_bytes_filled=" << n_bytes_filled << "\n";

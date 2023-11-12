@@ -312,9 +312,9 @@ int main(int argc, char *argv[]) {
 
         uint8_t n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
 
-        //auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
-        auto allocation = q.allocate_n(n_bytes+1); // +1 flat size byte
-        auto rawData_ptr = allocation.ptr;
+        auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
+        //auto allocation = q.allocate_n(n_bytes+1); // +1 flat size byte
+        //auto rawData_ptr = allocation.ptr;
         rawData_ptr[0] = n_bytes;
         auto n_bytes_filled = fill_generated_data(&rawData_ptr[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
         #if debug_logging > 0
@@ -322,8 +322,9 @@ int main(int argc, char *argv[]) {
         #endif
         #endif
 
-        auto allocation_shift = allocation.allocateNextWriteIdxCache_;
-        q.allocate_store(allocation_shift);
+        //auto allocation_shift = allocation.allocateNextWriteIdxCache_;
+        //q.allocate_store(allocation_shift);
+        q.allocate_store();
         rawData_ptr += n_bytes+1;
       }
     }

@@ -120,8 +120,8 @@ public:
   SPSCQueue(const SPSCQueue &) = delete;
   SPSCQueue &operator=(const SPSCQueue &) = delete;
 
-  //inline T* allocate_n(size_t n_items)
-  inline struct SPSCQueueAllocation<T> allocate_n(size_t n_items)
+  inline T* allocate_n(size_t n_items)
+  //inline struct SPSCQueueAllocation<T> allocate_n(size_t n_items)
   {
     auto writeIdx = writeIdx_.load(std::memory_order_relaxed);
     //n_items++; // it will need 1 item to save the number of following bytes
@@ -137,7 +137,7 @@ public:
     //  throw std::runtime_error("SPSCCoord::allocate_n overflow!");
     //}
 
-    size_t allocateNextWriteIdxCache_ = writeIdx+n_items;
+    allocateNextWriteIdxCache_ = writeIdx+n_items;
     // the case when it does not fit to the end of the buffer margin
     // do allocate the current pointer
     // but the next one must roll over
@@ -177,11 +177,14 @@ public:
     auto placement_ptr = &slots_[writeIdx + kPadding];
     // new (placement_ptr) T(std::forward<Args>(args)...);
 
-    return {.ptr=placement_ptr, .allocateNextWriteIdxCache_=allocateNextWriteIdxCache_};
+    return placement_ptr;
+    //return {.ptr=placement_ptr, .allocateNextWriteIdxCache_=allocateNextWriteIdxCache_};
     //std::cout << "SPSCQueue::emplace writeIdx=" << std::dec << writeIdx << " writeIdx+kPadding=" << writeIdx + kPadding << " placement_ptr=" << std::hex << placement_ptr << std::endl;
   }
 
-  inline void allocate_store(size_t allocateNextWriteIdxCache_) noexcept {
+  //inline void allocate_store(size_t allocateNextWriteIdxCache_) noexcept
+  inline void allocate_store() noexcept
+  {
     // assume the coord comes from allocate_n
     // the coord really must be a unique_ptr of the current index
     // i.e. coord.index == writeIdx_
@@ -359,13 +362,13 @@ private:
   alignas(kCacheLineSize) std::atomic<size_t> readIdx_ = {0};
   alignas(kCacheLineSize) size_t writeIdxCache_ = 0;
 
+  alignas(kCacheLineSize) size_t allocateNextWriteIdxCache_ = 0; // just to make the allocate logic work
+
   // CV control
   std::condition_variable cvNotEmpty;
   std::mutex queueMutex;
   std::atomic<bool> doneFlag;
 
   //alignas(kCacheLineSize) size_t wrapCapacity_ = {0}; // dynamic capacity size for the cases of allocate_n roll over
-
-  //alignas(kCacheLineSize) size_t allocateNextWriteIdxCache_ = 0; // just to make the allocate logic work
 };
 } // namespace rigtorp
