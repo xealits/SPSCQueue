@@ -215,8 +215,8 @@ int main(int argc, char *argv[]) {
         //uint8_t elink_id  = rawData_ptr[1]; // not anymore! just raw_data
 
         ////parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
-        ////unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
-        //all_res += parse_data(&rawData_ptr[1], n_payload);
+        //unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
+        all_res += parse_data(&rawData_ptr[1], n_payload, fe_data);
 
         // TODO: printout the packets to check?
         #if (debug_logging > 0)
