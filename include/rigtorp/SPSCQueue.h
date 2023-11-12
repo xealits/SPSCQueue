@@ -41,6 +41,14 @@ SOFTWARE.
 
 namespace rigtorp {
 
+template <typename T>
+struct SPSCQueueAllocation
+{
+  /* data */
+  T* ptr;
+  size_t allocateNextWriteIdxCache_ = 0; // to make the allocate logic work and pass by value
+};
+
 template <typename T, typename Allocator = std::allocator<T>> class SPSCQueue {
 
 #if defined(__cpp_if_constexpr) && defined(__cpp_lib_void_t)
@@ -109,7 +117,9 @@ public:
   SPSCQueue(const SPSCQueue &) = delete;
   SPSCQueue &operator=(const SPSCQueue &) = delete;
 
-  T* allocate_n(size_t n_items) {
+  //inline T* allocate_n(size_t n_items)
+  inline struct SPSCQueueAllocation<T> allocate_n(size_t n_items)
+  {
     auto writeIdx = writeIdx_.load(std::memory_order_relaxed);
     //n_items++; // it will need 1 item to save the number of following bytes
     // it's not const as there may be the case when writeIdx is shifted to 0
@@ -124,7 +134,7 @@ public:
     //  throw std::runtime_error("SPSCCoord::allocate_n overflow!");
     //}
 
-    allocateNextWriteIdxCache_ = writeIdx+n_items;
+    size_t allocateNextWriteIdxCache_ = writeIdx+n_items;
     // the case when it does not fit to the end of the buffer margin
     // do allocate the current pointer
     // but the next one must roll over
@@ -164,11 +174,11 @@ public:
     auto placement_ptr = &slots_[writeIdx + kPadding];
     // new (placement_ptr) T(std::forward<Args>(args)...);
 
-    return placement_ptr;
+    return {.ptr=placement_ptr, .allocateNextWriteIdxCache_=allocateNextWriteIdxCache_};
     //std::cout << "SPSCQueue::emplace writeIdx=" << std::dec << writeIdx << " writeIdx+kPadding=" << writeIdx + kPadding << " placement_ptr=" << std::hex << placement_ptr << std::endl;
   }
 
-  void allocate_store() noexcept {
+  inline void allocate_store(size_t allocateNextWriteIdxCache_) noexcept {
     // assume the coord comes from allocate_n
     // the coord really must be a unique_ptr of the current index
     // i.e. coord.index == writeIdx_
@@ -338,6 +348,6 @@ private:
 
   //alignas(kCacheLineSize) size_t wrapCapacity_ = {0}; // dynamic capacity size for the cases of allocate_n roll over
 
-  alignas(kCacheLineSize) size_t allocateNextWriteIdxCache_ = 0; // just to make the allocate logic work
+  //alignas(kCacheLineSize) size_t allocateNextWriteIdxCache_ = 0; // just to make the allocate logic work
 };
 } // namespace rigtorp
