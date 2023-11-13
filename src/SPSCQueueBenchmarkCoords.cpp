@@ -36,7 +36,7 @@ SOFTWARE.
 #include <folly/ProducerConsumerQueue.h>
 #endif
 
-#define debug_logging 2
+#define debug_logging 0
 #include "test_parsing.h"
 
 #define PARSE
@@ -96,6 +96,11 @@ alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
 int64_t process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_data) {
   uint8_t* rawDataContainer_ptr = nullptr;
   int64_t n_packets_processed = 0;
+
+  #if (debug_logging > 0)
+    std::cout << "process_core\n";
+  #endif
+
   while (rawDataContainer_ptr = q.front()) {
     //while (!q.front())
     //  ;
@@ -109,7 +114,7 @@ int64_t process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_dat
     size_t n_all_payload = 0;
 
     #if (debug_logging > 0)
-      std::cout << "new raw data container n_packets=" << (unsigned) n_packets << "\n";
+      std::cout << "new raw data container n_packets= " + std::to_string((unsigned) n_packets) << "\n";
     #endif
 
     uint8_t* rawData_ptr = &rawDataContainer_ptr[1];
@@ -161,9 +166,9 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
 
-  const int64_t n_containers  = 10; //100000;
-  const int64_t n_raw_packets = 1;  //1; // per container
-  const int64_t n_repeat      = 1;  //1000;
+  const int64_t n_containers  = 100000;
+  const int64_t n_raw_packets = 1; // per container
+  const int64_t n_repeat      = 100;
 
 
   if (test_spscqueue) {
@@ -261,8 +266,17 @@ int main(int argc, char *argv[]) {
       
         n_packets_processed += process_core(q, fe_data);
 
+        #if (debug_logging > 0)
+          std::cout << "process core after wait\n";
+        #endif
+
         if (q.isDone()) {
           n_packets_processed += process_core(q, fe_data);
+
+          #if (debug_logging > 0)
+            std::cout << "process core after done\n";
+          #endif
+
           break;
         }
       }
@@ -435,7 +449,7 @@ int main(int argc, char *argv[]) {
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 
-    std::cout << n_repeat * n_raw_packets * 1000000 /
+    std::cout << n_repeat * n_containers * n_raw_packets * 1000000 /
                      std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
                                                                           start)
                          .count()

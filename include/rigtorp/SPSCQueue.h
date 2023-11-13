@@ -412,7 +412,7 @@ private:
   // CV control
   std::condition_variable cvNotEmpty;
   std::mutex queueMutex;
-  std::atomic<bool> doneFlag;
+  std::atomic<bool> doneFlag = {false};
 
   //alignas(kCacheLineSize) size_t wrapCapacity_ = {0}; // dynamic capacity size for the cases of allocate_n roll over
 };
