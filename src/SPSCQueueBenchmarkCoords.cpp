@@ -103,7 +103,7 @@ int64_t process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_dat
     std::cout << "process_core\n";
   #endif
 
-  while (rawDataContainer_ptr = q.front()) {
+  while ((rawDataContainer_ptr = q.front())) {
     //while (!q.front())
     //  ;
     //if (*q.front() != i) {
@@ -168,9 +168,9 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
 
-  const int64_t n_containers  = 200000; // 100000;
+  const int64_t n_containers  = 10000; //200000; // 100000;
   const int64_t n_raw_packets = 20; // 1; // per container
-  const int64_t n_repeat      = 100;
+  const int64_t n_repeat      = 1000;
 
 
   if (test_spscqueue) {
@@ -240,15 +240,23 @@ int main(int argc, char *argv[]) {
     //SPSCQueue<uint8_t, Allocator<uint8_t>> q(1024*1, 128); // huge pages allocator does not work: what():  std::bad_alloc
     //SPSCQueue<uint8_t> q(1024*3, 128);
     //SPSCQueue<uint8_t> q(1024*8, 512);
-    std::vector<SPSCQueue<uint8_t>> rawDataQueues;
+    //std::vector<SPSCQueue<uint8_t>> rawDataQueues; // this did not work -- queue is not copiable
+    //rawDataQueues.reserve(N_PROCS);
+    //SPSCQueue<uint8_t> rawDataQueues[1] = {{1024*8, 512}};
+
+    std::vector<SPSCQueue<uint8_t>*> rawDataQueues;
     rawDataQueues.reserve(N_PROCS);
+
     std::vector<std::thread> rawDataThreads;
     rawDataThreads.reserve(N_PROCS);
     std::vector<int64_t> nPacketsProcessed;
     nPacketsProcessed.reserve(N_PROCS);
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
-      rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
+      //rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
+      //rawDataQueues[proc_i] = SPSCQueue<uint8_t>(1024*8, 512);
+
+      rawDataQueues.push_back(new SPSCQueue<uint8_t>(1024*8, 512));
       //int64_t n_packets_processed = 0;
       nPacketsProcessed.push_back(0);
 
@@ -257,7 +265,7 @@ int main(int argc, char *argv[]) {
       {
         pinThread(cpu1);
 
-        auto& q = rawDataQueues[thread_index];
+        auto& q = *(rawDataQueues[thread_index]);
         auto& n_packets_processed = nPacketsProcessed[thread_index];
 
         std::cout << "running the consumer thread" << std::endl;
@@ -306,7 +314,7 @@ int main(int argc, char *argv[]) {
     auto start_setup = std::chrono::steady_clock::now();
     // generate the data in memory
     const static long long unsigned a_packet_size = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2;
-    const static long long unsigned n_max_raw_data_bytes = n_raw_packets * (2 + a_packet_size); // with the netio header
+    const static long long unsigned n_max_raw_data_bytes = n_containers * n_raw_packets * (2 + a_packet_size); // with the netio header
     // 2=netio header + (2=header + N_ABCs*N_CLUSTERs*2bytes + 2=footer)
     uint8_t raw_data[n_max_raw_data_bytes];
     
@@ -314,12 +322,12 @@ int main(int argc, char *argv[]) {
     //for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
     //}
 
-    for (int i = 0; i < n_raw_packets; ++i) {
+    for (int i = 0; i < n_containers * n_raw_packets; ++i) {
       //q.emplace(i);
       // TODO: pre-known size!
       myBool with_netio_header = myFalse;
       #ifdef MEMCPY
-      with_netio_header = myTrue;
+      with_netio_header = myTrue; // not exactly used yet
       #endif
       size_t n_bytes = (MAX_CLUSTERS*MAX_ABCs*2 + 2 + 2) + (with_netio_header? 2 : 0);
       // the last 2 is the netio header -- it should not be there
@@ -358,11 +366,15 @@ int main(int argc, char *argv[]) {
       for (int i = 0; i < n_containers*n_raw_packets; ++i)
       {
         // push the same data to each processing worker
-        for () {
+        //for ()
+        {
         //q.emplace(i);
         uint8_t n_bytes  = raw_data_ptr[1];
 
         n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
+
+        unsigned thread_index = 0;
+        auto& q = (*rawDataQueues[thread_index]);
 
         // allocation logic
         // nested
@@ -421,6 +433,7 @@ int main(int argc, char *argv[]) {
         memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
         #else
         memcpy(&rawData_ptr[1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
+        raw_data_ptr += 2+n_bytes;
         #endif
         #else
         // direct fill
@@ -451,18 +464,36 @@ int main(int argc, char *argv[]) {
     // if something is left to store:
     if (n_packets_in_current_container!=0) {
       curr_container_size_byte_ptr[0] = n_packets_in_current_container;
+      unsigned thread_index = 0;
+      auto& q = *(rawDataQueues[thread_index]);
       q.allocate_store(); // TODO: can it execute these two lines out of order?
       #if debug_logging > 1
       std::cout << "push thread: allocate_store remainder\n";
       #endif
     }
 
-    q.finish(); // signal that the input is done
+    #if debug_logging > 1
+    std::cout << "push thread: finishing " + std::to_string(rawDataQueues.size()) + "\n";
+    #endif
+    //rawDataQueues[0]->finish();
+    for (auto& q: rawDataQueues) {
+      q->finish(); // signal that the input is done
+      #if debug_logging > 1
+      std::cout << "push thread: sent finish\n";
+      #endif
+    }
 
+    #if debug_logging > 1
+    std::cout << "push thread: joining threads!\n";
+    #endif
     //t_consumer.join();
     //std::vector<std::thread> rawDataThreads;
-    for (auto& procThread : rawDataThreads) {
-      procThread.join();
+    int64_t n_packets_processed = 0;
+    for (unsigned proc_i=0; proc_i<rawDataThreads.size(); proc_i++) {
+      //procThread.join();
+      rawDataThreads[proc_i].join();
+      //
+      n_packets_processed += nPacketsProcessed[proc_i];
     }
 
     auto stop = std::chrono::steady_clock::now();
