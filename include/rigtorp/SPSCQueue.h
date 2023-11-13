@@ -190,7 +190,7 @@ public:
 
     allocateCurNumberOfItems_  += n_items;
     if (allocateCurNumberOfItems_ > maxAllocationLength_) {
-      throw std::runtime_error("SPSCCoord::allocate_n requested too large size: " + std::to_string(n_items) + " > " + std::to_string(maxAllocationLength_));
+      throw std::runtime_error("SPSCCoord::allocate_n requested too large size: " + std::to_string(allocateCurNumberOfItems_) + " > " + std::to_string(maxAllocationLength_));
     } // TODO: maybe modify to not throw?
 
     // the allocation cannot wrap around

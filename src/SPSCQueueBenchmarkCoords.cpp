@@ -166,8 +166,8 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
 
-  const int64_t n_containers  = 100000;
-  const int64_t n_raw_packets = 1; // per container
+  const int64_t n_containers  = 200000; // 100000;
+  const int64_t n_raw_packets = 20; // 1; // per container
   const int64_t n_repeat      = 100;
 
 
@@ -237,10 +237,11 @@ int main(int argc, char *argv[]) {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
     //SPSCQueue<uint8_t, Allocator<uint8_t>> q(1024*1, 128); // huge pages allocator does not work: what():  std::bad_alloc
     //SPSCQueue<uint8_t> q(1024*3, 128);
-    SPSCQueue<uint8_t> q(256, 128);
+    SPSCQueue<uint8_t> q(1024*8, 512);
 
 /*
 */
+    int64_t n_packets_processed = 0;
     auto t_consumer = std::thread([&] {
       pinThread(cpu1);
       
@@ -256,7 +257,6 @@ int main(int argc, char *argv[]) {
       fe_data[0].fe_hits = fe_hits_array;
 
 
-      int64_t n_packets_processed = 0;
       //for (int i = 0; i < n_raw_packets*n_repeat; ++i)
       //while (n_packets_processed < n_containers*n_raw_packets*n_repeat)
       while (true)
@@ -449,7 +449,9 @@ int main(int argc, char *argv[]) {
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 
-    std::cout << n_repeat * n_containers * n_raw_packets * 1000000 /
+    //std::cout << n_repeat * n_containers * n_raw_packets * 1000000 /
+    // there is a test that n packets processed = the three multipliers
+    std::cout << n_packets_processed * 1000000 /
                      std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
                                                                           start)
                          .count()
