@@ -138,6 +138,7 @@ public:
     //}
 
     allocateNextWriteIdxCache_ = writeIdx+n_items;
+    allocateCurNumberOfItems_  = n_items;
     // the case when it does not fit to the end of the buffer margin
     // do allocate the current pointer
     // but the next one must roll over
@@ -180,6 +181,38 @@ public:
     return placement_ptr;
     //return {.ptr=placement_ptr, .allocateNextWriteIdxCache_=allocateNextWriteIdxCache_};
     //std::cout << "SPSCQueue::emplace writeIdx=" << std::dec << writeIdx << " writeIdx+kPadding=" << writeIdx + kPadding << " placement_ptr=" << std::hex << placement_ptr << std::endl;
+  }
+
+  /// @brief extend the current allocation by n items
+  /// @param n_items 
+  /// @return 0: fail, 1: extended and nextIdx is contiguous
+  inline int allocate_extend(size_t n_items) {
+
+    allocateCurNumberOfItems_  += n_items;
+    if (allocateCurNumberOfItems_ > maxAllocationLength_) {
+      throw std::runtime_error("SPSCCoord::allocate_n requested too large size: " + std::to_string(n_items) + " > " + std::to_string(maxAllocationLength_));
+    } // TODO: maybe modify to not throw?
+
+    // the allocation cannot wrap around
+
+    if (allocateNextWriteIdxCache_==0) {
+      // it means that the previous allocation ended in a wrap
+      // and you have to start a new one at 0
+      // you cannot extend it yet, since there was no allocate_n call
+      return 0;
+    }
+
+    allocateNextWriteIdxCache_ += n_items;
+    if (allocateNextWriteIdxCache_ > capacityMargin_) {
+      allocateNextWriteIdxCache_ = 0;
+    }
+
+    // test if the requested buffer has been read and is free
+    while (allocateNextWriteIdxCache_ == readIdxCache_) {
+      readIdxCache_ = readIdx_.load(std::memory_order_acquire);
+    }
+
+    return 1;
   }
 
   //inline void allocate_store(size_t allocateNextWriteIdxCache_) noexcept
@@ -269,6 +302,17 @@ public:
     cvNotEmpty.wait(lk,
                     [&] { return doneFlag || !empty(); } ); // rawEmpty -> atomics empty -- think/measure the overheads etc
   }
+
+  bool isDone() const {
+    return doneFlag;
+  }
+
+  void finish() {
+    std::unique_lock<std::mutex> lk(queueMutex);
+    doneFlag = true;
+    cvNotEmpty.notify_all();
+  }
+
 
   RIGTORP_NODISCARD T *front() noexcept {
     auto const readIdx = readIdx_.load(std::memory_order_relaxed);
@@ -363,6 +407,7 @@ private:
   alignas(kCacheLineSize) size_t writeIdxCache_ = 0;
 
   alignas(kCacheLineSize) size_t allocateNextWriteIdxCache_ = 0; // just to make the allocate logic work
+  alignas(kCacheLineSize) size_t allocateCurNumberOfItems_  = 0; // number of currently allocated items
 
   // CV control
   std::condition_variable cvNotEmpty;

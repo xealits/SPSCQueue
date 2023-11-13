@@ -36,7 +36,7 @@ SOFTWARE.
 #include <folly/ProducerConsumerQueue.h>
 #endif
 
-#define debug_logging 0
+#define debug_logging 2
 #include "test_parsing.h"
 
 #define PARSE
@@ -89,6 +89,62 @@ template <typename T> struct Allocator {
 };
 
 
+static constexpr size_t kCacheLineSize = 64;
+alignas(kCacheLineSize) unsigned long long n_all_payload_bytes = 0;
+alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
+
+int64_t process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_data) {
+  uint8_t* rawDataContainer_ptr = nullptr;
+  int64_t n_packets_processed = 0;
+  while (rawDataContainer_ptr = q.front()) {
+    //while (!q.front())
+    //  ;
+    //if (*q.front() != i) {
+    //  throw std::runtime_error("");
+    //}
+    //auto rawData_ptr = q.allocate_front();
+    //uint8_t n_payload = 24; // rawData_ptr->ptr[1];
+    //auto rawDataContainer_ptr = q.front();
+    uint8_t n_packets = rawDataContainer_ptr[0]; // in case of containers, first byte = n packets in it
+    size_t n_all_payload = 0;
+
+    #if (debug_logging > 0)
+      std::cout << "new raw data container n_packets=" << (unsigned) n_packets << "\n";
+    #endif
+
+    uint8_t* rawData_ptr = &rawDataContainer_ptr[1];
+    for (unsigned packet_i=0; packet_i<n_packets; packet_i++) {
+      #ifdef PARSE
+      //parse_data;
+      //uint8_t elink_id  = rawData_ptr[1]; // not anymore! just raw_data
+
+      uint8_t n_packet_payload = rawData_ptr[0];
+
+      ////parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
+      //unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
+      //all_res += parse_data(&rawData_ptr[1], n_packet_payload, fe_data);
+      parse_data(&rawData_ptr[1], n_packet_payload, fe_data);
+
+      // TODO: printout the packets to check?
+      #if (debug_logging > 0)
+        print_FrontEndData(fe_data);
+      #endif
+      #endif
+
+      n_all_payload_bytes += n_packet_payload; // account things
+      n_all_payload += n_packet_payload+1; // the container packet + its flat size byte
+      rawData_ptr += n_packet_payload+1;
+    }
+
+    //q.allocate_pop(*rawData_ptr);
+    q.allocate_pop_n(n_all_payload+1); // + the flat size byte for the container size
+    //std::cout << "the consumer i " << i << std::endl;
+    n_packets_processed += n_packets;
+  }
+  
+  return n_packets_processed;
+}
+
 int main(int argc, char *argv[]) {
   (void)argc, (void)argv;
 
@@ -104,8 +160,10 @@ int main(int argc, char *argv[]) {
 
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
-  const int64_t n_raw_packets = 100000;
-  const int64_t n_repeat      = 1000;
+
+  const int64_t n_containers  = 10; //100000;
+  const int64_t n_raw_packets = 1;  //1; // per container
+  const int64_t n_repeat      = 1;  //1000;
 
 
   if (test_spscqueue) {
@@ -173,10 +231,8 @@ int main(int argc, char *argv[]) {
   {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
     //SPSCQueue<uint8_t, Allocator<uint8_t>> q(1024*1, 128); // huge pages allocator does not work: what():  std::bad_alloc
-    SPSCQueue<uint8_t> q(1024*3, 128);
-    static constexpr size_t kCacheLineSize = 64;
-    alignas(kCacheLineSize) unsigned long long n_all_payload_bytes = 0;
-    alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
+    //SPSCQueue<uint8_t> q(1024*3, 128);
+    SPSCQueue<uint8_t> q(256, 128);
 
 /*
 */
@@ -195,44 +251,25 @@ int main(int argc, char *argv[]) {
       fe_data[0].fe_hits = fe_hits_array;
 
 
-      for (int i = 0; i < n_raw_packets*n_repeat; ++i) {
+      int64_t n_packets_processed = 0;
+      //for (int i = 0; i < n_raw_packets*n_repeat; ++i)
+      //while (n_packets_processed < n_containers*n_raw_packets*n_repeat)
+      while (true)
+      {
         q.waitNotEmptyOrDone(); // this is a blocking call
         // it guarantees that front() returns something and the following busy loop won't fire
-        //while (!q.front())
-        //  ;
-        //if (*q.front() != i) {
-        //  throw std::runtime_error("");
-        //}
-        //auto rawData_ptr = q.allocate_front();
-        //uint8_t n_payload = 24; // rawData_ptr->ptr[1];
-        auto rawData_ptr = q.front();
-        uint8_t n_payload = rawData_ptr[0]; // the buffer the payload includes netio header
+      
+        n_packets_processed += process_core(q, fe_data);
 
-        #if (debug_logging > 0)
-          std::cout << "new raw data n_payload=" << (unsigned) n_payload << "\n";
-        #endif
-
-        #ifdef PARSE
-        //parse_data;
-        //uint8_t elink_id  = rawData_ptr[1]; // not anymore! just raw_data
-
-        ////parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
-        //unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
-        all_res += parse_data(&rawData_ptr[1], n_payload, fe_data);
-
-        // TODO: printout the packets to check?
-        #if (debug_logging > 0)
-          print_FrontEndData(fe_data);
-        #endif
-        #endif
-
-        n_all_payload_bytes += n_payload; // account things
-        //q.allocate_pop(*rawData_ptr);
-        q.allocate_pop_n(n_payload+1); // + the flat size byte
-        //std::cout << "the consumer i " << i << std::endl;
+        if (q.isDone()) {
+          n_packets_processed += process_core(q, fe_data);
+          break;
+        }
       }
 
-      std::cout << "the consumer is done" << std::endl;
+      std::cout << "the consumer is done, n packets: " << n_packets_processed << std::endl;
+      if (n_packets_processed != n_containers*n_raw_packets*n_repeat)
+        throw std::runtime_error("the consumer processed " + std::to_string(n_packets_processed) + " != " + std::to_string(n_containers*n_raw_packets*n_repeat));
     });
 
     pinThread(cpu2);
@@ -280,54 +317,116 @@ int main(int argc, char *argv[]) {
 /*
 */
     // producer pushes the raw data to the queue:
+
+    uint8_t  n_packets_in_current_container = 0;
+    uint8_t  n_previous_packet_payload = 0; // = offset to the next flat packet place in the buffer
+    uint8_t* curr_container_size_byte_ptr = nullptr;
+    uint8_t* rawData_ptr = nullptr;
     for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
       raw_data_ptr = &raw_data[0];
-      for (int i = 0; i < n_raw_packets; ++i) {
+      //for (int i = 0; i < n_raw_packets; ++i)
+
+      for (int i = 0; i < n_containers*n_raw_packets; ++i)
+      {
         //q.emplace(i);
+        uint8_t n_bytes  = raw_data_ptr[1];
+
+        n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
+
+        // allocation logic
+        // nested
+        if (n_packets_in_current_container==0) { // then it's a new container
+          // allocate the new flat container with 1 packet
+          curr_container_size_byte_ptr = q.allocate_n(n_bytes+1+1); // +1 flat size byte for the packet and the container
+          rawData_ptr = &curr_container_size_byte_ptr[1];
+          n_packets_in_current_container = 1;
+          n_previous_packet_payload = n_bytes+1;
+        }
+
+        else { // the container exists, try to extend it
+          int extend_status = q.allocate_extend(n_bytes+1); // packet size + 1 flat size byte
+          if (extend_status == 0) {
+            // extend failed, store and allocate new container
+            curr_container_size_byte_ptr[0] = n_packets_in_current_container; // save the container size
+            q.allocate_store();
+            #if debug_logging > 1
+            std::cout << "push thread: allocate_store on failed extend\n";
+            #endif
+
+            // new container
+            curr_container_size_byte_ptr = q.allocate_n(n_bytes+1+1);
+            rawData_ptr = &curr_container_size_byte_ptr[1];
+            n_packets_in_current_container = 1;
+            n_previous_packet_payload = n_bytes+1;
+          }
+
+          else {
+            // successfull extension
+            n_packets_in_current_container += 1;
+            rawData_ptr += n_previous_packet_payload;
+            n_previous_packet_payload = n_bytes+1;
+          }
+        }
+
+        // at this point I have a valid rawData_ptr ?
+        rawData_ptr[0] = n_bytes;
+        // rawData_ptr[1] can get payload
 
         // copy the data into the queue
         #ifdef MEMCPY
-        uint8_t n_bytes  = raw_data_ptr[1];
 
         #if debug_logging > 0
         uint8_t elink_id = raw_data_ptr[0]; // not used here
         std::cout << "push on elink=" << (unsigned) elink_id << " n_bytes=" << (unsigned) n_bytes << "\n";
         #endif
 
-        // 2 is the netio header -- it should not be there
-        // 1 is the flat byte
-        auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
-        // TODO the user has to set it manually:
-        rawData_ptr[0] = n_bytes;
+        //// 2 is the netio header -- it should not be there
+        //// 1 is the flat byte
+        //auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
+        //// TODO the user has to set it manually:
+        //rawData_ptr[0] = n_bytes;
 
         #if MEMCPY > 0
-        
         memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
-
         #else
         memcpy(&rawData_ptr[1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
         #endif
-
         #else
-
-        uint8_t n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
-
-        auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
-        //auto allocation = q.allocate_n(n_bytes+1); // +1 flat size byte
-        //auto rawData_ptr = allocation.ptr;
-        rawData_ptr[0] = n_bytes;
+        // direct fill
         auto n_bytes_filled = fill_generated_data(&rawData_ptr[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
-        #if debug_logging > 0
+        #if debug_logging > 2
         std::cout << "push directly to the queue n_bytes_filled=" << n_bytes_filled << "\n";
         #endif
         #endif
 
-        //auto allocation_shift = allocation.allocateNextWriteIdxCache_;
-        //q.allocate_store(allocation_shift);
-        q.allocate_store();
-        rawData_ptr += n_bytes+1;
+        // if reached max container size -- store
+        if (n_packets_in_current_container==n_raw_packets) {
+          curr_container_size_byte_ptr[0] = n_packets_in_current_container;
+          q.allocate_store();
+          n_packets_in_current_container = 0;
+          n_previous_packet_payload = 0;
+          #if debug_logging > 1
+          std::cout << "push thread: allocate_store on max packets in container\n";
+          #endif
+        }
+        ////auto allocation_shift = allocation.allocateNextWriteIdxCache_;
+        ////q.allocate_store(allocation_shift);
+        //q.allocate_store();
+        //rawData_ptr += n_bytes+1;
       }
     }
+
+    // if something is left to store:
+    if (n_packets_in_current_container!=0) {
+      curr_container_size_byte_ptr[0] = n_packets_in_current_container;
+      q.allocate_store(); // TODO: can it execute these two lines out of order?
+      #if debug_logging > 1
+      std::cout << "push thread: allocate_store remainder\n";
+      #endif
+    }
+
+    q.finish(); // signal that the input is done
+
     t_consumer.join();
 
     auto stop = std::chrono::steady_clock::now();
