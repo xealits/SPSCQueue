@@ -39,9 +39,11 @@ SOFTWARE.
 #define debug_logging 0
 #include "test_parsing.h"
 
+#define N_PROCS 1
+
 #define PARSE
 
-//#define MEMCPY 0
+#define MEMCPY 0
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -237,54 +239,67 @@ int main(int argc, char *argv[]) {
     //SPSCQueueCoord<uint8_t> q(512, 1024); // 512 bytes, l1 cache line is 64 bytes, typical packet size is 24-44 bytes
     //SPSCQueue<uint8_t, Allocator<uint8_t>> q(1024*1, 128); // huge pages allocator does not work: what():  std::bad_alloc
     //SPSCQueue<uint8_t> q(1024*3, 128);
-    SPSCQueue<uint8_t> q(1024*8, 512);
+    //SPSCQueue<uint8_t> q(1024*8, 512);
+    std::vector<SPSCQueue<uint8_t>> rawDataQueues;
+    rawDataQueues.reserve(N_PROCS);
+    std::vector<std::thread> rawDataThreads;
+    rawDataThreads.reserve(N_PROCS);
+    std::vector<int64_t> nPacketsProcessed;
+    nPacketsProcessed.reserve(N_PROCS);
 
-/*
-*/
-    int64_t n_packets_processed = 0;
-    auto t_consumer = std::thread([&] {
-      pinThread(cpu1);
-      
-      std::cout << "running the consumer thread" << std::endl;
-      // output data
-      struct FrontEndData fe_data[2];
-      //FrontEndHit  fe_hits_array[max_n_abcs*max_n_clusters*2];
-      FrontEndHit  fe_hits_array[MAX_ABCs*MAX_CLUSTERS*2];
-      // set up the output pad
-      fe_data[0].l0id = 0;
-      fe_data[0].bcid = 0;
-      fe_data[0].n_hits  = 0;
-      fe_data[0].fe_hits = fe_hits_array;
+    for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
+      rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
+      //int64_t n_packets_processed = 0;
+      nPacketsProcessed.push_back(0);
 
-
-      //for (int i = 0; i < n_raw_packets*n_repeat; ++i)
-      //while (n_packets_processed < n_containers*n_raw_packets*n_repeat)
-      while (true)
+      //auto t_consumer = std::thread([&]
+      rawDataThreads.push_back(std::thread([&] (unsigned thread_index)
       {
-        q.waitNotEmptyOrDone(); // this is a blocking call
-        // it guarantees that front() returns something and the following busy loop won't fire
-      
-        n_packets_processed += process_core(q, fe_data);
+        pinThread(cpu1);
 
-        #if (debug_logging > 0)
-          std::cout << "process core after wait\n";
-        #endif
+        auto& q = rawDataQueues[thread_index];
+        auto& n_packets_processed = nPacketsProcessed[thread_index];
 
-        if (q.isDone()) {
+        std::cout << "running the consumer thread" << std::endl;
+        // output data
+        struct FrontEndData fe_data[2];
+        //FrontEndHit  fe_hits_array[max_n_abcs*max_n_clusters*2];
+        FrontEndHit  fe_hits_array[MAX_ABCs*MAX_CLUSTERS*2];
+        // set up the output pad
+        fe_data[0].l0id = 0;
+        fe_data[0].bcid = 0;
+        fe_data[0].n_hits  = 0;
+        fe_data[0].fe_hits = fe_hits_array;
+
+        //for (int i = 0; i < n_raw_packets*n_repeat; ++i)
+        //while (n_packets_processed < n_containers*n_raw_packets*n_repeat)
+        while (true)
+        {
+          q.waitNotEmptyOrDone(); // this is a blocking call
+          // it guarantees that front() returns something and the following busy loop won't fire
+        
           n_packets_processed += process_core(q, fe_data);
 
           #if (debug_logging > 0)
-            std::cout << "process core after done\n";
+            std::cout << "process core after wait\n";
           #endif
 
-          break;
-        }
-      }
+          if (q.isDone()) {
+            n_packets_processed += process_core(q, fe_data);
 
-      std::cout << "the consumer is done, n packets: " << n_packets_processed << std::endl;
-      if (n_packets_processed != n_containers*n_raw_packets*n_repeat)
-        throw std::runtime_error("the consumer processed " + std::to_string(n_packets_processed) + " != " + std::to_string(n_containers*n_raw_packets*n_repeat));
-    });
+            #if (debug_logging > 0)
+              std::cout << "process core after done\n";
+            #endif
+
+            break;
+          }
+        }
+
+        std::cout << "the consumer is done, n packets: " << n_packets_processed << std::endl;
+        if (n_packets_processed != n_containers*n_raw_packets*n_repeat)
+          throw std::runtime_error("the consumer processed " + std::to_string(n_packets_processed) + " != " + std::to_string(n_containers*n_raw_packets*n_repeat));
+      }, proc_i));
+    }
 
     pinThread(cpu2);
 
@@ -342,6 +357,8 @@ int main(int argc, char *argv[]) {
 
       for (int i = 0; i < n_containers*n_raw_packets; ++i)
       {
+        // push the same data to each processing worker
+        for () {
         //q.emplace(i);
         uint8_t n_bytes  = raw_data_ptr[1];
 
@@ -428,6 +445,7 @@ int main(int argc, char *argv[]) {
         //q.allocate_store();
         //rawData_ptr += n_bytes+1;
       }
+      }
     }
 
     // if something is left to store:
@@ -441,7 +459,11 @@ int main(int argc, char *argv[]) {
 
     q.finish(); // signal that the input is done
 
-    t_consumer.join();
+    //t_consumer.join();
+    //std::vector<std::thread> rawDataThreads;
+    for (auto& procThread : rawDataThreads) {
+      procThread.join();
+    }
 
     auto stop = std::chrono::steady_clock::now();
 
