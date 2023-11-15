@@ -40,7 +40,7 @@ SOFTWARE.
 #define debug_logging 0
 #include "test_parsing.h"
 
-#define N_PROCS 1
+#define N_PROCS 4
 
 #define RECORD_PROC_TIMINGS
 
@@ -58,6 +58,8 @@ void pinThread(int cpu) {
   if (cpu < 0) {
     return;
   }
+  std::cout << "pinThread " + std::to_string(cpu) + "\n";
+
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
   CPU_SET(cpu, &cpuset);
@@ -286,9 +288,9 @@ int main(int argc, char *argv[]) {
       nProcessingTime.push_back(0);
 
       //auto t_consumer = std::thread([&]
-      rawDataThreads.push_back(std::thread([&] (unsigned thread_index)
+      rawDataThreads.push_back(std::thread([&] (unsigned thread_index, int cpu_to_pin)
       {
-        pinThread(cpu1);
+        pinThread(cpu_to_pin);
 
         auto& q = *(rawDataQueues[thread_index]);
         auto& n_packets_processed = nPacketsProcessed[thread_index];
@@ -338,10 +340,12 @@ int main(int argc, char *argv[]) {
                      " n_bytes=" + std::to_string(nBytesProcessed[thread_index]) + "\n";
         if (n_packets_processed != n_containers*n_raw_packets*n_repeat)
           throw std::runtime_error("the consumer processed " + std::to_string(n_packets_processed) + " != " + std::to_string(n_containers*n_raw_packets*n_repeat));
-      }, proc_i));
+      }, proc_i, cpu2));
+
+      if (cpu2 > 0) { cpu2++; }
     }
 
-    pinThread(cpu2);
+    pinThread(cpu1);
 
     auto start_setup = std::chrono::steady_clock::now();
     // generate the data in memory
