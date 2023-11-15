@@ -189,7 +189,7 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
 
-  const int64_t n_containers  = 10000; //200000; // 100000;
+  const int64_t n_containers  = 10000; //10000; //200000; // 100000;
   const int64_t n_raw_packets = 20; // 1; // per container
   const int64_t n_repeat      = 1000;
 
@@ -270,6 +270,7 @@ int main(int argc, char *argv[]) {
 
     std::vector<std::thread> rawDataThreads;
     rawDataThreads.reserve(N_PROCS);
+
     std::vector<uint64_t> nPacketsProcessed;
     nPacketsProcessed.reserve(N_PROCS);
     std::vector<uint64_t> nBytesProcessed;
@@ -281,7 +282,7 @@ int main(int argc, char *argv[]) {
       //rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
       //rawDataQueues[proc_i] = SPSCQueue<uint8_t>(1024*8, 512);
 
-      rawDataQueues.push_back(new SPSCQueue<uint8_t>(1024*8, 512));
+      rawDataQueues.push_back(new SPSCQueue<uint8_t>(1024*8, 1024));
       //int64_t n_packets_processed = 0;
       nPacketsProcessed.push_back(0);
       nBytesProcessed.push_back(0);
@@ -295,7 +296,11 @@ int main(int argc, char *argv[]) {
         auto& q = *(rawDataQueues[thread_index]);
         auto& n_packets_processed = nPacketsProcessed[thread_index];
 
-        std::cout << "running the consumer thread" << std::endl;
+        uint64_t           _nPacketsProcessed = 0;
+        uint64_t           _nBytesProcessed   = 0;
+        unsigned long long _nProcessingTime   = 0;
+
+        std::cout << "running the consumer thread\n";
         // output data
         struct FrontEndData fe_data[2];
         //FrontEndHit  fe_hits_array[max_n_abcs*max_n_clusters*2];
@@ -314,9 +319,9 @@ int main(int argc, char *argv[]) {
           // it guarantees that front() returns something and the following busy loop won't fire
         
           struct nPacketsBytes stats = process_core(q, fe_data);
-          nPacketsProcessed [thread_index] += stats.n_packets;
-          nBytesProcessed   [thread_index] += stats.n_bytes;
-          nProcessingTime   [thread_index] += stats.t_diff;
+          _nPacketsProcessed  += stats.n_packets;
+          _nBytesProcessed    += stats.n_bytes;
+          _nProcessingTime    += stats.t_diff;
 
           #if (debug_logging > 0)
             std::cout << "process core after wait\n";
@@ -324,14 +329,17 @@ int main(int argc, char *argv[]) {
 
           if (q.isDone()) {
             stats = process_core(q, fe_data);
-            nPacketsProcessed [thread_index] += stats.n_packets;
-            nBytesProcessed   [thread_index] += stats.n_bytes;
-            nProcessingTime   [thread_index] += stats.t_diff;
+            _nPacketsProcessed += stats.n_packets;
+            _nBytesProcessed   += stats.n_bytes;
+            _nProcessingTime   += stats.t_diff;
 
             #if (debug_logging > 0)
               std::cout << "process core after done\n";
             #endif
 
+            nPacketsProcessed [thread_index] = _nPacketsProcessed ;
+            nBytesProcessed   [thread_index] = _nBytesProcessed   ;
+            nProcessingTime   [thread_index] = _nProcessingTime   ;
             break;
           }
         }
@@ -420,7 +428,7 @@ int main(int argc, char *argv[]) {
         n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
 
         //unsigned proc_i = 0;
-        auto& q = (*rawDataQueues[proc_i]);
+        auto& q = *(rawDataQueues[proc_i]);
 
         //
         auto& n_packets_in_current_container = n_packets_in_current_container_s[proc_i];
