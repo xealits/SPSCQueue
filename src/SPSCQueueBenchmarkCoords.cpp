@@ -27,6 +27,7 @@ SOFTWARE.
 
 #include <sys/mman.h>
 
+#include <x86intrin.h> // unsigned long long __rdtsc();
 
 #if __has_include(<boost/lockfree/spsc_queue.hpp> )
 #include <boost/lockfree/spsc_queue.hpp>
@@ -40,6 +41,8 @@ SOFTWARE.
 #include "test_parsing.h"
 
 #define N_PROCS 1
+
+#define RECORD_PROC_TIMINGS
 
 #define PARSE
 
@@ -98,6 +101,7 @@ alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
 struct nPacketsBytes {
   uint64_t n_packets=0;
   uint64_t n_bytes=0;
+  unsigned long long t_diff = 0;
 };
 
 struct nPacketsBytes process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_data) {
@@ -107,6 +111,11 @@ struct nPacketsBytes process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEn
 
   #if (debug_logging > 0)
     std::cout << "process_core\n";
+  #endif
+
+  unsigned long long __time_proc_start = 0, __time_proc_end = 0;
+  #ifdef RECORD_PROC_TIMINGS
+  __time_proc_start = __rdtsc();
   #endif
 
   while ((rawDataContainer_ptr = q.front())) {
@@ -154,8 +163,12 @@ struct nPacketsBytes process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEn
     //std::cout << "the consumer i " << i << std::endl;
     n_packets_processed += n_packets;
   }
-  
-  return {.n_packets=n_packets_processed, .n_bytes=n_all_payload_bytes};
+
+  #ifdef RECORD_PROC_TIMINGS
+  __time_proc_end = __rdtsc();
+  #endif
+
+  return {.n_packets=n_packets_processed, .n_bytes=n_all_payload_bytes, .t_diff=__time_proc_end - __time_proc_start};
 }
 
 int main(int argc, char *argv[]) {
@@ -259,6 +272,8 @@ int main(int argc, char *argv[]) {
     nPacketsProcessed.reserve(N_PROCS);
     std::vector<uint64_t> nBytesProcessed;
     nBytesProcessed.reserve(N_PROCS);
+    std::vector<unsigned long long> nProcessingTime;
+    nProcessingTime.reserve(N_PROCS);
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
       //rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
@@ -267,6 +282,8 @@ int main(int argc, char *argv[]) {
       rawDataQueues.push_back(new SPSCQueue<uint8_t>(1024*8, 512));
       //int64_t n_packets_processed = 0;
       nPacketsProcessed.push_back(0);
+      nBytesProcessed.push_back(0);
+      nProcessingTime.push_back(0);
 
       //auto t_consumer = std::thread([&]
       rawDataThreads.push_back(std::thread([&] (unsigned thread_index)
@@ -297,6 +314,7 @@ int main(int argc, char *argv[]) {
           struct nPacketsBytes stats = process_core(q, fe_data);
           nPacketsProcessed [thread_index] += stats.n_packets;
           nBytesProcessed   [thread_index] += stats.n_bytes;
+          nProcessingTime   [thread_index] += stats.t_diff;
 
           #if (debug_logging > 0)
             std::cout << "process core after wait\n";
@@ -306,6 +324,7 @@ int main(int argc, char *argv[]) {
             stats = process_core(q, fe_data);
             nPacketsProcessed [thread_index] += stats.n_packets;
             nBytesProcessed   [thread_index] += stats.n_bytes;
+            nProcessingTime   [thread_index] += stats.t_diff;
 
             #if (debug_logging > 0)
               std::cout << "process core after done\n";
@@ -380,6 +399,7 @@ int main(int argc, char *argv[]) {
 */
     // producer pushes the raw data to the queue:
 
+    unsigned long long __time_push_start = __rdtsc();
     for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
       raw_data_ptr = &raw_data[0];
       //for (int i = 0; i < n_raw_packets; ++i)
@@ -508,6 +528,8 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    unsigned long long __time_push_end = __rdtsc();
+
     #if debug_logging > 1
     std::cout << "push thread: finishing " + std::to_string(rawDataQueues.size()) + "\n";
     #endif
@@ -537,11 +559,20 @@ int main(int argc, char *argv[]) {
 
     n_packets_processed = nPacketsProcessed[0]; // overwrite, take just 1 processor
 
+    unsigned long long __time_push_join = __rdtsc();
+
     auto stop = std::chrono::steady_clock::now();
 
     std::cout << "all res =" << all_res << std::endl;
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
+
+    std::cout << "CPU time to push=" << std::to_string(__time_push_end - __time_push_start)
+              << " time to join=" << std::to_string(__time_push_join - __time_push_end) << std::endl;
+
+    for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
+      std::cout << "CPU time to process=" << std::to_string(nProcessingTime[proc_i]) << std::endl;
+    }
 
     //std::cout << n_repeat * n_containers * n_raw_packets * 1000000 /
     // there is a test that n packets processed = the three multipliers
