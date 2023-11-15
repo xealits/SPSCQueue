@@ -92,12 +92,18 @@ template <typename T> struct Allocator {
 
 
 static constexpr size_t kCacheLineSize = 64;
-alignas(kCacheLineSize) unsigned long long n_all_payload_bytes = 0;
+//alignas(kCacheLineSize) unsigned long long n_all_payload_bytes = 0;
 alignas(kCacheLineSize) unsigned long long all_res = 0; // dumy output
 
-int64_t process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_data) {
+struct nPacketsBytes {
+  uint64_t n_packets=0;
+  uint64_t n_bytes=0;
+};
+
+struct nPacketsBytes process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_data) {
   uint8_t* rawDataContainer_ptr = nullptr;
-  int64_t n_packets_processed = 0;
+  alignas(kCacheLineSize) uint64_t n_packets_processed = 0;
+  alignas(kCacheLineSize) uint64_t n_all_payload_bytes = 0;
 
   #if (debug_logging > 0)
     std::cout << "process_core\n";
@@ -149,7 +155,7 @@ int64_t process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_dat
     n_packets_processed += n_packets;
   }
   
-  return n_packets_processed;
+  return {.n_packets=n_packets_processed, .n_bytes=n_all_payload_bytes};
 }
 
 int main(int argc, char *argv[]) {
@@ -249,8 +255,10 @@ int main(int argc, char *argv[]) {
 
     std::vector<std::thread> rawDataThreads;
     rawDataThreads.reserve(N_PROCS);
-    std::vector<int64_t> nPacketsProcessed;
+    std::vector<uint64_t> nPacketsProcessed;
     nPacketsProcessed.reserve(N_PROCS);
+    std::vector<uint64_t> nBytesProcessed;
+    nBytesProcessed.reserve(N_PROCS);
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
       //rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
@@ -286,14 +294,18 @@ int main(int argc, char *argv[]) {
           q.waitNotEmptyOrDone(); // this is a blocking call
           // it guarantees that front() returns something and the following busy loop won't fire
         
-          n_packets_processed += process_core(q, fe_data);
+          struct nPacketsBytes stats = process_core(q, fe_data);
+          nPacketsProcessed [thread_index] += stats.n_packets;
+          nBytesProcessed   [thread_index] += stats.n_bytes;
 
           #if (debug_logging > 0)
             std::cout << "process core after wait\n";
           #endif
 
           if (q.isDone()) {
-            n_packets_processed += process_core(q, fe_data);
+            stats = process_core(q, fe_data);
+            nPacketsProcessed [thread_index] += stats.n_packets;
+            nBytesProcessed   [thread_index] += stats.n_bytes;
 
             #if (debug_logging > 0)
               std::cout << "process core after done\n";
@@ -303,7 +315,8 @@ int main(int argc, char *argv[]) {
           }
         }
 
-        std::cout << "the consumer is done, n packets: " << n_packets_processed << std::endl;
+        std::cout << "the consumer is done, n_packets=" + std::to_string(nPacketsProcessed[thread_index]) + 
+                     " n_bytes=" + std::to_string(nBytesProcessed[thread_index]) + "\n";
         if (n_packets_processed != n_containers*n_raw_packets*n_repeat)
           throw std::runtime_error("the consumer processed " + std::to_string(n_packets_processed) + " != " + std::to_string(n_containers*n_raw_packets*n_repeat));
       }, proc_i));
@@ -345,6 +358,18 @@ int main(int argc, char *argv[]) {
     auto n_bytes_filled = fill_generated_data(raw_a_packet, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
     if (n_bytes_filled != a_packet_size) throw std::runtime_error("a_packet wrong n_bytes_filled! " + std::to_string(n_bytes_filled) + " != " + std::to_string(a_packet_size));
 
+    uint8_t  n_packets_in_current_container_s[N_PROCS];
+    uint8_t  n_previous_packet_payload_s[N_PROCS]; // = offset to the next flat packet place in the buffer
+    uint8_t* curr_container_size_byte_ptr_s[N_PROCS];
+    uint8_t* rawData_ptr_s[N_PROCS];
+
+    for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
+        n_packets_in_current_container_s[proc_i] = 0;
+        n_previous_packet_payload_s[proc_i] = 0;
+        curr_container_size_byte_ptr_s[proc_i] = nullptr;
+        rawData_ptr_s[proc_i] = nullptr;
+    }
+
     auto stop_setup = std::chrono::steady_clock::now();
 
     std::cout << "setup time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop_setup - start_setup).count() << " ms" << std::endl;
@@ -355,26 +380,29 @@ int main(int argc, char *argv[]) {
 */
     // producer pushes the raw data to the queue:
 
-    uint8_t  n_packets_in_current_container = 0;
-    uint8_t  n_previous_packet_payload = 0; // = offset to the next flat packet place in the buffer
-    uint8_t* curr_container_size_byte_ptr = nullptr;
-    uint8_t* rawData_ptr = nullptr;
     for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
       raw_data_ptr = &raw_data[0];
       //for (int i = 0; i < n_raw_packets; ++i)
+      uint8_t n_bytes  = 0; // n_bytes in the current raw data packet
 
       for (int i = 0; i < n_containers*n_raw_packets; ++i)
       {
         // push the same data to each processing worker
-        //for ()
+        for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++)
         {
         //q.emplace(i);
-        uint8_t n_bytes  = raw_data_ptr[1];
+        n_bytes  = raw_data_ptr[1];
 
         n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
 
-        unsigned thread_index = 0;
-        auto& q = (*rawDataQueues[thread_index]);
+        //unsigned proc_i = 0;
+        auto& q = (*rawDataQueues[proc_i]);
+
+        //
+        auto& n_packets_in_current_container = n_packets_in_current_container_s[proc_i];
+        auto& n_previous_packet_payload      = n_previous_packet_payload_s[proc_i];
+        auto& curr_container_size_byte_ptr   = curr_container_size_byte_ptr_s[proc_i];
+        auto& rawData_ptr = rawData_ptr_s[proc_i];
 
         // allocation logic
         // nested
@@ -433,7 +461,6 @@ int main(int argc, char *argv[]) {
         memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
         #else
         memcpy(&rawData_ptr[1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
-        raw_data_ptr += 2+n_bytes;
         #endif
         #else
         // direct fill
@@ -458,18 +485,27 @@ int main(int argc, char *argv[]) {
         //q.allocate_store();
         //rawData_ptr += n_bytes+1;
       }
+      raw_data_ptr += 2+n_bytes;
       }
     }
 
     // if something is left to store:
-    if (n_packets_in_current_container!=0) {
-      curr_container_size_byte_ptr[0] = n_packets_in_current_container;
-      unsigned thread_index = 0;
-      auto& q = *(rawDataQueues[thread_index]);
-      q.allocate_store(); // TODO: can it execute these two lines out of order?
-      #if debug_logging > 1
-      std::cout << "push thread: allocate_store remainder\n";
-      #endif
+    for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
+      //
+      auto& n_packets_in_current_container = n_packets_in_current_container_s[proc_i];
+      auto& n_previous_packet_payload      = n_previous_packet_payload_s[proc_i];
+      auto& curr_container_size_byte_ptr   = curr_container_size_byte_ptr_s[proc_i];
+      auto& rawData_ptr = rawData_ptr_s[proc_i];
+
+      if (n_packets_in_current_container!=0) {
+        curr_container_size_byte_ptr[0] = n_packets_in_current_container;
+        //unsigned thread_index = 0;
+        auto& q = *(rawDataQueues[proc_i]);
+        q.allocate_store(); // TODO: can it execute these two lines out of order?
+        #if debug_logging > 1
+        std::cout << "push thread: allocate_store remainder\n";
+        #endif
+      }
     }
 
     #if debug_logging > 1
@@ -488,13 +524,18 @@ int main(int argc, char *argv[]) {
     #endif
     //t_consumer.join();
     //std::vector<std::thread> rawDataThreads;
-    int64_t n_packets_processed = 0;
+
+    uint64_t n_packets_processed = 0;
+    uint64_t n_all_payload_bytes = 0;
     for (unsigned proc_i=0; proc_i<rawDataThreads.size(); proc_i++) {
       //procThread.join();
       rawDataThreads[proc_i].join();
       //
       n_packets_processed += nPacketsProcessed[proc_i];
+      n_all_payload_bytes += nBytesProcessed[proc_i];
     }
+
+    n_packets_processed = nPacketsProcessed[0]; // overwrite, take just 1 processor
 
     auto stop = std::chrono::steady_clock::now();
 
@@ -505,10 +546,8 @@ int main(int argc, char *argv[]) {
     //std::cout << n_repeat * n_containers * n_raw_packets * 1000000 /
     // there is a test that n packets processed = the three multipliers
     std::cout << n_packets_processed * 1000000 /
-                     std::chrono::duration_cast<std::chrono::nanoseconds>(stop -
-                                                                          start)
-                         .count()
-              << " ops/ms" << std::endl;
+                     std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start).count()
+              << " ops/ms (per thread)" << std::endl;
 
     std::cout << n_all_payload_bytes << " bytes" << std::endl;
     std::cout << (double) n_all_payload_bytes * 1000000000 / ((unsigned long long) 1000000 *
