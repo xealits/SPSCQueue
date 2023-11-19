@@ -40,13 +40,15 @@ SOFTWARE.
 #define debug_logging 0
 #include "test_parsing.h"
 
-#define N_PROCS 4
+#define N_PROCS 8
 
 #define RECORD_PROC_TIMINGS
 
 #define PARSE
 
 #define MEMCPY 0
+
+#define MAX_RAWDATACONTAINER_SIZE (1024 + 512) // in bytes, must be >= 1 as there is always 1 flat size byte
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -189,9 +191,9 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
 
-  const int64_t n_containers  = 10000; //10000; //200000; // 100000;
-  const int64_t n_raw_packets = 20; // 1; // per container
-  const int64_t n_repeat      = 1000;
+  const int64_t n_containers  = 5000; //10000; //200000; // 100000;
+  const int64_t n_raw_packets = 60; // 1; // per container
+  const int64_t n_repeat      = 100;
 
 
   if (test_spscqueue) {
@@ -282,7 +284,7 @@ int main(int argc, char *argv[]) {
       //rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
       //rawDataQueues[proc_i] = SPSCQueue<uint8_t>(1024*8, 512);
 
-      rawDataQueues.push_back(new SPSCQueue<uint8_t>(1024*8, 1024));
+      rawDataQueues.push_back(new SPSCQueue<uint8_t>(1024*8, MAX_RAWDATACONTAINER_SIZE));
       //int64_t n_packets_processed = 0;
       nPacketsProcessed.push_back(0);
       nBytesProcessed.push_back(0);
@@ -389,28 +391,35 @@ int main(int argc, char *argv[]) {
     auto n_bytes_filled = fill_generated_data(raw_a_packet, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
     if (n_bytes_filled != a_packet_size) throw std::runtime_error("a_packet wrong n_bytes_filled! " + std::to_string(n_bytes_filled) + " != " + std::to_string(a_packet_size));
 
-    uint8_t  n_packets_in_current_container_s[N_PROCS];
-    uint8_t  n_previous_packet_payload_s[N_PROCS]; // = offset to the next flat packet place in the buffer
-    uint8_t* curr_container_size_byte_ptr_s[N_PROCS];
-    uint8_t* rawData_ptr_s[N_PROCS];
-
-    for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
-        n_packets_in_current_container_s[proc_i] = 0;
-        n_previous_packet_payload_s[proc_i] = 0;
-        curr_container_size_byte_ptr_s[proc_i] = nullptr;
-        rawData_ptr_s[proc_i] = nullptr;
-    }
-
     auto stop_setup = std::chrono::steady_clock::now();
 
     std::cout << "setup time: " << std::chrono::duration_cast<std::chrono::milliseconds>(stop_setup - start_setup).count() << " ms" << std::endl;
 
+    // the push thread pushPad info
+    /*
+    uint8_t  n_packets_in_current_container_s[N_PROCS];
+    uint8_t  n_previous_packet_payload_s[N_PROCS]; // = offset to the next flat packet place in the buffer
+    uint8_t* curr_container_size_byte_ptr_s[N_PROCS];
+    uint8_t* rawData_ptr_s[N_PROCS];
+    */
+
+    uint8_t  pushPad[N_PROCS][MAX_RAWDATACONTAINER_SIZE];
+    unsigned pushPad_curIndex[N_PROCS];
+
+    for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
+        //n_packets_in_current_container_s[proc_i] = 0;
+        //n_previous_packet_payload_s[proc_i] = 0;
+        //curr_container_size_byte_ptr_s[proc_i] = nullptr;
+        //rawData_ptr_s[proc_i] = nullptr;
+        pushPad[proc_i][0] = 0; // container size
+        pushPad_curIndex[proc_i] = 1;
+    }
+
+    // producer pushes the raw data to the queue:
     auto start = std::chrono::steady_clock::now();
 
 /*
 */
-    // producer pushes the raw data to the queue:
-
     unsigned long long __time_push_start = __rdtsc();
     for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
       raw_data_ptr = &raw_data[0];
@@ -423,13 +432,22 @@ int main(int argc, char *argv[]) {
         for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++)
         {
         //q.emplace(i);
+        //uint8_t elink_id = raw_data_ptr[0]; // not used here TODO: start using elink id, so that it does not unfold the loop etc
         n_bytes  = raw_data_ptr[1];
 
         n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
 
+        // 1 = container flat size byte (for n packets)
+        // 1 = packet flat size byte (for n bytes in the packet)
+        // n_bytes = packet RawData payload
+        if (1+1+n_bytes > MAX_RAWDATACONTAINER_SIZE) { // it won't fit
+          throw std::runtime_error("raw packet data won't fit into the max size container: " + std::to_string((unsigned)1+1+n_bytes) + std::to_string((unsigned) MAX_RAWDATACONTAINER_SIZE));
+        }
+
         //unsigned proc_i = 0;
         auto& q = *(rawDataQueues[proc_i]);
 
+/*
         //
         auto& n_packets_in_current_container = n_packets_in_current_container_s[proc_i];
         auto& n_previous_packet_payload      = n_previous_packet_payload_s[proc_i];
@@ -516,6 +534,59 @@ int main(int argc, char *argv[]) {
         ////q.allocate_store(allocation_shift);
         //q.allocate_store();
         //rawData_ptr += n_bytes+1;
+*/
+
+        auto& n_packets_in_current_container = pushPad[proc_i][0];
+        auto& curIndex = pushPad_curIndex[proc_i];
+
+        // if the new data does not fit, then push the current data to the queue
+        // and clear the pushPad
+        // the new packet is n_bytes long
+        // but +1 is its flat size byte
+        if (curIndex+1+n_bytes > MAX_RAWDATACONTAINER_SIZE) {
+          // curIndex == the current number of all payload bytes in the pushPad
+          uint8_t* queuedContainer_ptr = q.allocate_n(curIndex);
+          // memcpy to the queued space
+          #if MEMCPY > 0
+          //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
+          #else
+          memcpy(queuedContainer_ptr, pushPad[proc_i], curIndex*sizeof(uint8_t));
+          #endif
+          q.allocate_store();
+
+          // clear the pushPad:
+          n_packets_in_current_container = 0;
+          curIndex = 1;
+        }
+
+        // at this point I do have an index into the pushPad with enough space for the raw data
+        // memcpy the data into it and set the flat size byte
+        pushPad[proc_i][curIndex] = n_bytes;
+        #if MEMCPY > 0
+        //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t)); // TODO this is outdated, right?
+        #else
+        memcpy(&pushPad[proc_i][curIndex+1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
+        #endif
+
+        curIndex += 1+n_bytes;
+        n_packets_in_current_container ++;
+
+        // if n packets reached its max, push to the queue
+        if (n_packets_in_current_container == n_raw_packets) {
+          uint8_t* queuedContainer_ptr = q.allocate_n(curIndex);
+
+          #if MEMCPY > 0
+          //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
+          #else
+          memcpy(queuedContainer_ptr, pushPad[proc_i], curIndex*sizeof(uint8_t));
+          #endif
+          q.allocate_store();
+
+          // clear the pushPad:
+          n_packets_in_current_container = 0;
+          curIndex = 1;
+        }
+
       }
       raw_data_ptr += 2+n_bytes;
       }
@@ -523,20 +594,37 @@ int main(int argc, char *argv[]) {
 
     // if something is left to store:
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
-      //
-      auto& n_packets_in_current_container = n_packets_in_current_container_s[proc_i];
-      auto& n_previous_packet_payload      = n_previous_packet_payload_s[proc_i];
-      auto& curr_container_size_byte_ptr   = curr_container_size_byte_ptr_s[proc_i];
-      auto& rawData_ptr = rawData_ptr_s[proc_i];
+      //auto& n_packets_in_current_container = n_packets_in_current_container_s[proc_i];
+      //auto& n_previous_packet_payload      = n_previous_packet_payload_s[proc_i];
+      //auto& curr_container_size_byte_ptr   = curr_container_size_byte_ptr_s[proc_i];
+      //auto& rawData_ptr = rawData_ptr_s[proc_i];
 
-      if (n_packets_in_current_container!=0) {
-        curr_container_size_byte_ptr[0] = n_packets_in_current_container;
-        //unsigned thread_index = 0;
+      //if (n_packets_in_current_container!=0) {
+      //  curr_container_size_byte_ptr[0] = n_packets_in_current_container;
+      //  //unsigned thread_index = 0;
+      //  auto& q = *(rawDataQueues[proc_i]);
+      //  q.allocate_store(); // TODO: can it execute these two lines out of order?
+      //  #if debug_logging > 1
+      //  std::cout << "push thread: allocate_store remainder\n";
+      //  #endif
+      //}
+
+      //
+      auto& n_packets_in_current_container = pushPad[proc_i][0];
+      auto& curIndex = pushPad_curIndex[proc_i];
+
+      if (curIndex>1) {
         auto& q = *(rawDataQueues[proc_i]);
-        q.allocate_store(); // TODO: can it execute these two lines out of order?
-        #if debug_logging > 1
-        std::cout << "push thread: allocate_store remainder\n";
+        uint8_t* queuedContainer_ptr = q.allocate_n(curIndex);
+        #if MEMCPY > 0
+        //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
+        #else
+        memcpy(queuedContainer_ptr, pushPad[proc_i], curIndex*sizeof(uint8_t));
         #endif
+        q.allocate_store();
+
+        n_packets_in_current_container = 0;
+        curIndex = 1;
       }
     }
 
@@ -579,8 +667,8 @@ int main(int argc, char *argv[]) {
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 
-    std::cout << "CPU time to push=" << std::to_string(__time_push_end - __time_push_start)
-              << " time to join=" << std::to_string(__time_push_join - __time_push_end) << std::endl;
+    std::cout << "CPU time to push=" << std::to_string(__time_push_end  - __time_push_start)
+              << " time to join="    << std::to_string(__time_push_join - __time_push_end) << std::endl;
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
       std::cout << "CPU time to process=" << std::to_string(nProcessingTime[proc_i]) << std::endl;
