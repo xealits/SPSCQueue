@@ -40,9 +40,10 @@ SOFTWARE.
 #define debug_logging 0
 #include "test_parsing.h"
 
-#define N_PROCS 8
+#define N_PROCS 1
 
 #define RECORD_PROC_TIMINGS
+//#define RECORD_MEMCPY_TIMINGS
 
 #define PARSE
 
@@ -405,6 +406,11 @@ int main(int argc, char *argv[]) {
 
     uint8_t  pushPad[N_PROCS][MAX_RAWDATACONTAINER_SIZE];
     unsigned pushPad_curIndex[N_PROCS];
+    alignas(64) uint8_t  pushPad_nPackets[N_PROCS];
+    // a local cache of the flat nPackets bytes, so that it does not walk the addresses too much
+
+    alignas(64) unsigned long long time_memcpy_pushPad  = 0;
+    alignas(64) unsigned long long time_memcpy_allocate = 0;
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
         //n_packets_in_current_container_s[proc_i] = 0;
@@ -412,6 +418,7 @@ int main(int argc, char *argv[]) {
         //curr_container_size_byte_ptr_s[proc_i] = nullptr;
         //rawData_ptr_s[proc_i] = nullptr;
         pushPad[proc_i][0] = 0; // container size
+        pushPad_nPackets[proc_i] = 0;
         pushPad_curIndex[proc_i] = 1;
     }
 
@@ -447,96 +454,8 @@ int main(int argc, char *argv[]) {
         //unsigned proc_i = 0;
         auto& q = *(rawDataQueues[proc_i]);
 
-/*
-        //
-        auto& n_packets_in_current_container = n_packets_in_current_container_s[proc_i];
-        auto& n_previous_packet_payload      = n_previous_packet_payload_s[proc_i];
-        auto& curr_container_size_byte_ptr   = curr_container_size_byte_ptr_s[proc_i];
-        auto& rawData_ptr = rawData_ptr_s[proc_i];
-
-        // allocation logic
-        // nested
-        if (n_packets_in_current_container==0) { // then it's a new container
-          // allocate the new flat container with 1 packet
-          curr_container_size_byte_ptr = q.allocate_n(n_bytes+1+1); // +1 flat size byte for the packet and the container
-          rawData_ptr = &curr_container_size_byte_ptr[1];
-          n_packets_in_current_container = 1;
-          n_previous_packet_payload = n_bytes+1;
-        }
-
-        else { // the container exists, try to extend it
-          int extend_status = q.allocate_extend(n_bytes+1); // packet size + 1 flat size byte
-          if (extend_status == 0) {
-            // extend failed, store and allocate new container
-            curr_container_size_byte_ptr[0] = n_packets_in_current_container; // save the container size
-            q.allocate_store();
-            #if debug_logging > 1
-            std::cout << "push thread: allocate_store on failed extend\n";
-            #endif
-
-            // new container
-            curr_container_size_byte_ptr = q.allocate_n(n_bytes+1+1);
-            rawData_ptr = &curr_container_size_byte_ptr[1];
-            n_packets_in_current_container = 1;
-            n_previous_packet_payload = n_bytes+1;
-          }
-
-          else {
-            // successfull extension
-            n_packets_in_current_container += 1;
-            rawData_ptr += n_previous_packet_payload;
-            n_previous_packet_payload = n_bytes+1;
-          }
-        }
-
-        // at this point I have a valid rawData_ptr ?
-        rawData_ptr[0] = n_bytes;
-        // rawData_ptr[1] can get payload
-
-        // copy the data into the queue
-        #ifdef MEMCPY
-
-        #if debug_logging > 0
-        uint8_t elink_id = raw_data_ptr[0]; // not used here
-        std::cout << "push on elink=" << (unsigned) elink_id << " n_bytes=" << (unsigned) n_bytes << "\n";
-        #endif
-
-        //// 2 is the netio header -- it should not be there
-        //// 1 is the flat byte
-        //auto rawData_ptr = q.allocate_n(n_bytes+1); // +1 flat size byte
-        //// TODO the user has to set it manually:
-        //rawData_ptr[0] = n_bytes;
-
-        #if MEMCPY > 0
-        memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
-        #else
-        memcpy(&rawData_ptr[1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
-        #endif
-        #else
-        // direct fill
-        auto n_bytes_filled = fill_generated_data(&rawData_ptr[1], myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, myFalse);
-        #if debug_logging > 2
-        std::cout << "push directly to the queue n_bytes_filled=" << n_bytes_filled << "\n";
-        #endif
-        #endif
-
-        // if reached max container size -- store
-        if (n_packets_in_current_container==n_raw_packets) {
-          curr_container_size_byte_ptr[0] = n_packets_in_current_container;
-          q.allocate_store();
-          n_packets_in_current_container = 0;
-          n_previous_packet_payload = 0;
-          #if debug_logging > 1
-          std::cout << "push thread: allocate_store on max packets in container\n";
-          #endif
-        }
-        ////auto allocation_shift = allocation.allocateNextWriteIdxCache_;
-        ////q.allocate_store(allocation_shift);
-        //q.allocate_store();
-        //rawData_ptr += n_bytes+1;
-*/
-
-        auto& n_packets_in_current_container = pushPad[proc_i][0];
+        //auto& n_packets_in_current_container = pushPad[proc_i][0];
+        auto& n_packets_in_current_container = pushPad_nPackets[proc_i];
         auto& curIndex = pushPad_curIndex[proc_i];
 
         // if the new data does not fit, then push the current data to the queue
@@ -546,7 +465,9 @@ int main(int argc, char *argv[]) {
         if (curIndex+1+n_bytes > MAX_RAWDATACONTAINER_SIZE) {
           // curIndex == the current number of all payload bytes in the pushPad
           uint8_t* queuedContainer_ptr = q.allocate_n(curIndex);
-          // memcpy to the queued space
+          // save the n packets
+          pushPad[proc_i][0] = n_packets_in_current_container;
+          // and memcpy to the queued space
           #if MEMCPY > 0
           //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
           #else
@@ -565,7 +486,16 @@ int main(int argc, char *argv[]) {
         #if MEMCPY > 0
         //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t)); // TODO this is outdated, right?
         #else
+
+        #ifdef RECORD_MEMCPY_TIMINGS
+        auto __time_memcpy_pushPad_start = __rdtsc();
+        #endif
         memcpy(&pushPad[proc_i][curIndex+1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
+
+        #ifdef RECORD_MEMCPY_TIMINGS
+        auto __time_memcpy_pushPad_end   = __rdtsc();
+        time_memcpy_pushPad += __time_memcpy_pushPad_end - __time_memcpy_pushPad_start;
+        #endif
         #endif
 
         curIndex += 1+n_bytes;
@@ -575,10 +505,23 @@ int main(int argc, char *argv[]) {
         if (n_packets_in_current_container == n_raw_packets) {
           uint8_t* queuedContainer_ptr = q.allocate_n(curIndex);
 
+          // save the n packets
+          pushPad[proc_i][0] = n_packets_in_current_container;
+
+          // and memcpy to the queue
           #if MEMCPY > 0
           //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
+
           #else
+          #ifdef RECORD_MEMCPY_TIMINGS
+          auto __time_memcpy_start = __rdtsc();
+          #endif
+
           memcpy(queuedContainer_ptr, pushPad[proc_i], curIndex*sizeof(uint8_t));
+          #ifdef RECORD_MEMCPY_TIMINGS
+          auto __time_memcpy_end   = __rdtsc();
+          time_memcpy_allocate += __time_memcpy_end - __time_memcpy_start;
+          #endif
           #endif
           q.allocate_store();
 
@@ -669,6 +612,9 @@ int main(int argc, char *argv[]) {
 
     std::cout << "CPU time to push=" << std::to_string(__time_push_end  - __time_push_start)
               << " time to join="    << std::to_string(__time_push_join - __time_push_end) << std::endl;
+
+    std::cout << "CPU time to memcpy pushPad="    << std::to_string(time_memcpy_pushPad)
+              << " time to memcpy allocateQueue=" << std::to_string(time_memcpy_allocate) << std::endl;
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
       std::cout << "CPU time to process=" << std::to_string(nProcessingTime[proc_i]) << std::endl;
