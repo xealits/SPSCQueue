@@ -40,16 +40,27 @@ SOFTWARE.
 #define debug_logging 0
 #include "test_parsing.h"
 
-#define N_PROCS 4
+#define N_PROCS  2
+#define N_ELINKS 8
 
 #define RECORD_PROC_TIMINGS
 //#define RECORD_MEMCPY_TIMINGS
+
+#define WITH_ELINK_ID
+
+#ifdef WITH_ELINK_ID
+#define FLAT_PACKET_HEADER_SIZE 2
+#else
+#define FLAT_PACKET_HEADER_SIZE 1
+#endif
+
+#define FLAT_CONTAINER_HEADER_SIZE 1 // 1 byte for N packets in the container
 
 #define PARSE
 
 #define MEMCPY 0
 
-#define MAX_RAWDATACONTAINER_SIZE (1024) // in bytes, must be >= 1 as there is always 1 flat size byte
+#define MAX_RAWDATACONTAINER_SIZE (1024+512) // in bytes, must be >= 1 as there is always 1 flat size byte
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -109,7 +120,7 @@ struct nPacketsBytes {
   unsigned long long t_diff = 0;
 };
 
-struct nPacketsBytes process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_data) {
+struct nPacketsBytes process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEndData* fe_data, uint8_t proc_id) {
   uint8_t* rawDataContainer_ptr = nullptr;
   alignas(kCacheLineSize) uint64_t n_packets_processed = 0;
   alignas(kCacheLineSize) uint64_t n_all_payload_bytes = 0;
@@ -150,17 +161,23 @@ struct nPacketsBytes process_core(rigtorp::SPSCQueue<uint8_t>& q, struct FrontEn
       ////parse_data(&rawData_ptr->ptr[2], n_payload, fe_data);
       //unsigned res = parse_data(&rawData_ptr[1], n_payload, fe_data);
       //all_res += parse_data(&rawData_ptr[1], n_packet_payload, fe_data);
+      
+      #ifdef WITH_ELINK_ID
+      uint8_t elink_id = rawData_ptr[1];
+      parse_data_elinks(&rawData_ptr[2], n_packet_payload, elink_id, fe_data);
+      #else
       parse_data(&rawData_ptr[1], n_packet_payload, fe_data);
+      #endif
 
       // TODO: printout the packets to check?
       #if (debug_logging > 0)
-        print_FrontEndData(fe_data);
+        print_FrontEndData(fe_data, elink_id, proc_id);
       #endif
       #endif
 
       n_all_payload_bytes += n_packet_payload; // account things
-      n_all_payload += n_packet_payload+1; // the container packet + its flat size byte
-      rawData_ptr += n_packet_payload+1;
+      n_all_payload += n_packet_payload+FLAT_PACKET_HEADER_SIZE; // the container packet + its flat size byte
+      rawData_ptr += n_packet_payload+FLAT_PACKET_HEADER_SIZE;
     }
 
     //q.allocate_pop(*rawData_ptr);
@@ -192,8 +209,8 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
 
-  const int64_t n_containers  = 10000; //10000; //200000; // 100000;
-  const int64_t n_raw_packets = 20; // 1; // per container
+  const int64_t n_containers  = 5000; //10000; //200000; // 100000;
+  const int64_t n_raw_packets = 60; // 1; // per container
   const int64_t n_repeat      = 1000;
 
 
@@ -309,7 +326,7 @@ int main(int argc, char *argv[]) {
 
         std::cout << "running the consumer thread\n";
         // output data
-        struct FrontEndData fe_data[2];
+        struct FrontEndData fe_data[2]; // TODO outdata pad: N elinks & some efficient map/switch?
         //FrontEndHit  fe_hits_array[max_n_abcs*max_n_clusters*2];
         FrontEndHit  fe_hits_array[MAX_ABCs*MAX_CLUSTERS*2];
         // set up the output pad
@@ -318,6 +335,11 @@ int main(int argc, char *argv[]) {
         fe_data[0].n_hits  = 0;
         fe_data[0].fe_hits = fe_hits_array;
 
+        fe_data[1].l0id = 0;
+        fe_data[1].bcid = 0;
+        fe_data[1].n_hits  = 0;
+        fe_data[1].fe_hits = &fe_hits_array[MAX_ABCs*MAX_CLUSTERS];
+
         //for (int i = 0; i < n_raw_packets*n_repeat; ++i)
         //while (n_packets_processed < n_containers*n_raw_packets*n_repeat)
         while (true)
@@ -325,7 +347,7 @@ int main(int argc, char *argv[]) {
           q.waitNotEmptyOrDone(); // this is a blocking call
           // it guarantees that front() returns something and the following busy loop won't fire
         
-          struct nPacketsBytes stats = process_core(q, fe_data);
+          struct nPacketsBytes stats = process_core(q, fe_data, thread_index);
           _nPacketsProcessed  += stats.n_packets;
           _nBytesProcessed    += stats.n_bytes;
           _nProcessingTime    += stats.t_diff;
@@ -336,7 +358,7 @@ int main(int argc, char *argv[]) {
           #endif
 
           if (q.isDone()) {
-            stats = process_core(q, fe_data);
+            stats = process_core(q, fe_data, thread_index);
             _nPacketsProcessed += stats.n_packets;
             _nBytesProcessed   += stats.n_bytes;
             _nProcessingTime   += stats.t_diff;
@@ -356,8 +378,10 @@ int main(int argc, char *argv[]) {
 
         std::cout << "the consumer is done, n_packets=" + std::to_string(nPacketsProcessed[thread_index]) + 
                      " n_bytes=" + std::to_string(nBytesProcessed[thread_index]) + "\n";
-        if (n_packets_processed != n_containers*n_raw_packets*n_repeat)
-          throw std::runtime_error("the consumer processed " + std::to_string(n_packets_processed) + " != " + std::to_string(n_containers*n_raw_packets*n_repeat));
+        
+        //// nope, we are not copying anymore
+        //if (n_packets_processed != n_containers*n_raw_packets*n_repeat)
+        //  throw std::runtime_error("the consumer processed " + std::to_string(n_packets_processed) + " != " + std::to_string(n_containers*n_raw_packets*n_repeat));
       }, proc_i, cpu2));
 
       if (cpu2 > 0) { cpu2++; }
@@ -376,22 +400,33 @@ int main(int argc, char *argv[]) {
     //for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
     //}
 
+    uint8_t elink_id = 0;
     for (int i = 0; i < n_containers * n_raw_packets; ++i) {
       //q.emplace(i);
       // TODO: pre-known size!
+      
+      #ifdef WITH_ELINK_ID
+      myBool with_netio_header = myTrue;
+      #else
       myBool with_netio_header = myFalse;
-      #ifdef MEMCPY
-      with_netio_header = myTrue; // not exactly used yet
       #endif
+
+      //#ifdef MEMCPY
+      //with_netio_header = myTrue; // not exactly used yet
+      //#endif
       size_t n_bytes = (MAX_CLUSTERS*MAX_ABCs*2 + 2 + 2) + (with_netio_header? 2 : 0);
       // the last 2 is the netio header -- it should not be there
       // (and there used to be 1 for the flat size byte)
 
-      auto n_bytes_filled = fill_generated_data(raw_data_ptr, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, with_netio_header);
+      auto n_bytes_filled = fill_generated_data(raw_data_ptr, myFalse, myFalse, MAX_CLUSTERS, MAX_ABCs, with_netio_header, elink_id);
+
       #ifdef debug_logging
       if (n_bytes_filled != n_bytes) throw std::runtime_error("wrong n_bytes_filled! " + std::to_string(n_bytes_filled) + " != " + std::to_string(n_bytes));
       #endif
       raw_data_ptr+=n_bytes;
+    
+      elink_id++;
+      if (elink_id >= N_ELINKS) elink_id = 0;
     }
 
     // a single packet pad
@@ -426,7 +461,7 @@ int main(int argc, char *argv[]) {
         //rawData_ptr_s[proc_i] = nullptr;
         pushPad[proc_i][0] = 0; // container size
         pushPad_nPackets[proc_i] = 0;
-        pushPad_curIndex[proc_i] = 1;
+        pushPad_curIndex[proc_i] = FLAT_CONTAINER_HEADER_SIZE;
     }
 
     // producer pushes the raw data to the queue:
@@ -438,15 +473,16 @@ int main(int argc, char *argv[]) {
     for (int rep_i = 0; rep_i < n_repeat; ++rep_i) {
       raw_data_ptr = &raw_data[0];
       //for (int i = 0; i < n_raw_packets; ++i)
-      uint8_t n_bytes  = 0; // n_bytes in the current raw data packet
+
+      uint8_t n_bytes  = 0; // n_bytes in the current raw data packet that is repeated N times
 
       for (int i = 0; i < n_containers*n_raw_packets; ++i)
       {
         // push the same data to each processing worker
-        for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++)
+        //for (unsigned proc_i=0; proc_i<N_ELINKS; proc_i++)
         {
         //q.emplace(i);
-        //uint8_t elink_id = raw_data_ptr[0]; // not used here TODO: start using elink id, so that it does not unfold the loop etc
+        uint8_t elink_id = raw_data_ptr[0]; // not used here TODO: start using elink id, so that it does not unfold the loop etc
         n_bytes  = raw_data_ptr[1];
 
         n_bytes = 2 + MAX_ABCs * MAX_CLUSTERS * 2 + 2; // not randomized
@@ -454,12 +490,61 @@ int main(int argc, char *argv[]) {
         // 1 = container flat size byte (for n packets)
         // 1 = packet flat size byte (for n bytes in the packet)
         // n_bytes = packet RawData payload
-        if (1+1+n_bytes > MAX_RAWDATACONTAINER_SIZE) { // it won't fit
-          throw std::runtime_error("raw packet data won't fit into the max size container: " + std::to_string((unsigned)1+1+n_bytes) + std::to_string((unsigned) MAX_RAWDATACONTAINER_SIZE));
+        if (1+FLAT_PACKET_HEADER_SIZE+n_bytes > MAX_RAWDATACONTAINER_SIZE) { // it won't fit
+          throw std::runtime_error("raw packet data won't fit into the max size container: " + std::to_string((unsigned)1+FLAT_PACKET_HEADER_SIZE+n_bytes) + std::to_string((unsigned) MAX_RAWDATACONTAINER_SIZE));
         }
 
-        //unsigned proc_i = 0;
-        auto& q = *(rawDataQueues[proc_i]);
+        unsigned proc_i = 0;
+
+/*
+        switch (elink_id) {
+          case 0:
+          case 1:
+            proc_i = 0;
+            break;
+          case 2:
+          case 3:
+            proc_i = 1;
+            break;
+          case 4:
+          case 5:
+            proc_i = 2;
+            break;
+          case 6:
+          case 7:
+            proc_i = 3;
+            break;
+          case 8:
+          case 9:
+            proc_i = 4;
+            break;
+          case 10:
+          case 11:
+            proc_i = 5;
+            break;
+        }
+*/
+
+        switch (elink_id) {
+          case 0:
+          case 1:
+          case 2:
+          case 3:
+            proc_i = 0;
+            break;
+          case 4:
+          case 5:
+          case 6:
+          case 7:
+            proc_i = 1;
+            break;
+          case 8:
+          case 9:
+          case 10:
+          case 11:
+            proc_i = 2;
+            break;
+        }
 
         //auto& n_packets_in_current_container = pushPad[proc_i][0];
         auto& n_packets_in_current_container = pushPad_nPackets[proc_i];
@@ -469,11 +554,17 @@ int main(int argc, char *argv[]) {
         // and clear the pushPad
         // the new packet is n_bytes long
         // but +1 is its flat size byte
-        if (curIndex+1+n_bytes > MAX_RAWDATACONTAINER_SIZE) {
+        if (curIndex+FLAT_PACKET_HEADER_SIZE+n_bytes > MAX_RAWDATACONTAINER_SIZE) {
           // curIndex == the current number of all payload bytes in the pushPad
+          auto& q = *(rawDataQueues[proc_i]);
           uint8_t* queuedContainer_ptr = q.allocate_n(curIndex);
           // save the n packets
           pushPad[proc_i][0] = n_packets_in_current_container;
+
+          #if debug_logging > 1
+          std::cout << "reached container size limit, push it: " + std::to_string(n_packets_in_current_container) + "\n";
+          #endif
+
           // and memcpy to the queued space
           #if MEMCPY > 0
           //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t));
@@ -484,12 +575,16 @@ int main(int argc, char *argv[]) {
 
           // clear the pushPad:
           n_packets_in_current_container = 0;
-          curIndex = 1;
+          curIndex = FLAT_CONTAINER_HEADER_SIZE;
         }
 
         // at this point I do have an index into the pushPad with enough space for the raw data
         // memcpy the data into it and set the flat size byte
-        pushPad[proc_i][curIndex] = n_bytes;
+        pushPad[proc_i][curIndex+0] = n_bytes;
+        #ifdef WITH_ELINK_ID
+        pushPad[proc_i][curIndex+1] = elink_id;
+        #endif 
+
         #if MEMCPY > 0
         //memcpy(&rawData_ptr[1], raw_a_packet, n_bytes*sizeof(uint8_t)); // TODO this is outdated, right?
         #else
@@ -497,7 +592,7 @@ int main(int argc, char *argv[]) {
         #ifdef RECORD_MEMCPY_TIMINGS
         auto __time_memcpy_pushPad_start = __rdtsc();
         #endif
-        memcpy(&pushPad[proc_i][curIndex+1], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
+        memcpy(&pushPad[proc_i][curIndex+FLAT_PACKET_HEADER_SIZE], &raw_data_ptr[2], n_bytes*sizeof(uint8_t));
 
         #ifdef RECORD_MEMCPY_TIMINGS
         auto __time_memcpy_pushPad_end   = __rdtsc();
@@ -505,15 +600,20 @@ int main(int argc, char *argv[]) {
         #endif
         #endif
 
-        curIndex += 1+n_bytes;
+        curIndex += FLAT_PACKET_HEADER_SIZE+n_bytes;
         n_packets_in_current_container ++;
 
         // if n packets reached its max, push to the queue
         if (n_packets_in_current_container == n_raw_packets) {
+          auto& q = *(rawDataQueues[proc_i]);
           uint8_t* queuedContainer_ptr = q.allocate_n(curIndex);
 
           // save the n packets
           pushPad[proc_i][0] = n_packets_in_current_container;
+
+          #if debug_logging > 1
+          std::cout << "reached N packets per container limit, push it: " + std::to_string(n_packets_in_current_container) + "\n";
+          #endif
 
           // and memcpy to the queue
           #if MEMCPY > 0
@@ -534,7 +634,7 @@ int main(int argc, char *argv[]) {
 
           // clear the pushPad:
           n_packets_in_current_container = 0;
-          curIndex = 1;
+          curIndex = FLAT_CONTAINER_HEADER_SIZE;
         }
 
       }
@@ -562,7 +662,9 @@ int main(int argc, char *argv[]) {
       //}
 
       //
+      //auto& n_packets_in_current_container = pushPad[proc_i][0];
       auto& n_packets_in_current_container = pushPad[proc_i][0];
+      pushPad[proc_i][0] = pushPad_nPackets[proc_i];
       auto& curIndex = pushPad_curIndex[proc_i];
 
       if (curIndex>1) {
@@ -635,9 +737,9 @@ int main(int argc, char *argv[]) {
 
     //std::cout << n_repeat * n_containers * n_raw_packets * 1000000 /
     // there is a test that n packets processed = the three multipliers
-    std::cout << n_packets_processed * 1000000 /
+    std::cout << (n_packets_processed * N_PROCS / N_ELINKS) * 1000000 /
                      std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start).count()
-              << " ops/ms (per thread)" << std::endl;
+              << " ops/ms (per elink)" << std::endl;
 
     std::cout << n_all_payload_bytes << " bytes" << std::endl;
     std::cout << (double) n_all_payload_bytes * 1000000000 / ((unsigned long long) 1000000 *

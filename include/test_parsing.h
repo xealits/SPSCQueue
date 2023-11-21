@@ -126,8 +126,8 @@ int random_int(int lower, int upper) {
 /// max size is when each ABC outputs 4 clusters + 2 bytes header and 2 bytes footer
 /// max_n_abcs * max_n_clusters * 2 + (2) + (2)
 /// and netio header = 2 bytes
-unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool big_endianness, unsigned max_n_abcs, unsigned max_n_clusters, myBool with_netio_header) {
-	uint8_t elink_id = 0;
+unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool big_endianness, unsigned max_n_abcs, unsigned max_n_clusters, myBool with_netio_header, uint8_t elink_id=0) {
+	//uint8_t elink_id = 0;
 	unsigned n_bytes_star_data = 0; // to be calculated
 
 	unsigned n_bytes_netio_header=0;
@@ -139,7 +139,7 @@ unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool
 
 	// star data
 	unsigned cur_i = 0;
-	if (with_netio_header) cur_i=2;
+	cur_i += n_bytes_netio_header;
 	uint8_t flag = 0;
 	uint8_t l0id = 0xC;
 	uint8_t bcid = 0x3;
@@ -205,10 +205,10 @@ unsigned fill_generated_data(uint8_t* raw_data, myBool randomize_packets, myBool
 	return n_bytes_star_data + n_bytes_netio_header;
 }
 
-void print_FrontEndData(struct FrontEndData* fe_data) {
+void print_FrontEndData(struct FrontEndData* fe_data, uint8_t elink_id=0, unsigned proc_id=0) {
 	uint32_t n_hits = fe_data->n_hits;
 	FrontEndHit * fe_hits = fe_data->fe_hits;
-	printf("print_FrontEndData: %d %x n_hits=%d |", fe_data->l0id, fe_data->bcid, n_hits);
+	printf("print_FrontEndData: %d:%d   %d %x n_hits=%d |", (unsigned) elink_id, (unsigned) proc_id, fe_data->l0id, fe_data->bcid, n_hits);
 	for (int i=0; i<n_hits; i++) {
 		printf(" %d:%d-%d-%d", fe_hits[i].fields.abc_id, fe_hits[i].fields.row, fe_hits[i].fields.x, fe_hits[i].fields.strips_pattern);
 	}
@@ -270,6 +270,129 @@ extern inline unsigned parse_data(uint8_t* raw_data, uint8_t n_data_bytes, struc
 
 	uint16_t* cl_array = ((uint16_t*) raw_data) + 1;
 	//uint16_t cl = *(uint16_t*) (&raw_data[2 + n_cluster*2 + 0]);
+
+	out_data->flag = flag;
+	out_data->l0id = l0id;
+	out_data->bcid = bcid;
+	out_data->n_hits = n_clusters;
+/*
+*/
+
+	//unsigned res = 0;
+	FrontEndHit * fe_hits = out_data->fe_hits;
+
+	// clusters
+	// here 1 cluster = 1 hit, the strips pattern is copied
+	//for (uint8_t n_cluster=0; n_cluster<n_clusters; n_cluster++)
+	for (uint8_t n_cluster=0; n_cluster<10; n_cluster++)
+	{ // assume 10 abcs with 1 cluster each
+		/*
+		//
+		uint8_t byte0 = raw_data[2 + n_cluster*2 + 0];
+		uint8_t byte1 = raw_data[2 + n_cluster*2 + 1];
+
+		//uint8_t cl1 = ((abc_id & 0xf)<<3) | ((strips_address>>5) & 0x7);
+		//uint8_t cl2 = ((strips_address & 0x1f)<<3) | (strips_pattern & 0x7);
+
+		uint8_t abc_id  = (byte0>>3) & 0xf;
+		uint8_t address = ((byte0 & 0x7) << 5) | ((byte1 >> 3) & 0x1f);
+		uint8_t strips_pattern = byte1 & 0x7;
+		*/
+
+
+		// row and x
+
+		//// direct
+		//uint16_t cl = cl_array[n_cluster]; // *(uint16_t*) (&raw_data[2 + n_cluster*2 + 0]);
+		//uint8_t abc_id  = cl >> 11;
+		//uint8_t address = (cl >> 3) & 0xff;
+		////uint8_t row = (cl >> 10) & 0x1;
+		////uint8_t x   = (cl >> 3)  & 0x7f;
+		//uint8_t strips_pattern  = cl & 0x7;
+
+		//fe_hits[n_cluster].abc_id = abc_id;
+		////fe_hits[n_cluster].row    = row; // (address & 0x80) >> 7;
+		////fe_hits[n_cluster].x      = x; // address & 0x7f;
+		//fe_hits[n_cluster].row    = (address & 0x80) >> 7;
+		//fe_hits[n_cluster].x      =  address & 0x7f;
+		//fe_hits[n_cluster].strips_pattern = strips_pattern;
+
+		//// packed
+		//uint32_t cl = cl_array[n_cluster]; // *(uint16_t*) (&raw_data[2 + n_cluster*2 + 0]);
+		//uint32_t abc_id  = (cl & (0xf << 11)) << (24 - 11);
+		//uint32_t address = (cl >> 3) & 0xff;
+		//uint32_t row = (address & (0x1  << 7)) << (16 - 7);
+		//uint32_t x   = (address & (0x7f))      << (8);
+		//uint32_t strips_pattern  = cl & 0x7;
+		//fe_hits[n_cluster].bits = abc_id | row | x | strips_pattern;
+		//printf("parse_data: cl %x -> %x %x %x\n", cl, abc_id, address, strips_pattern);
+
+		// or just bit fields:
+		fe_hits[n_cluster].bits = cl_array[n_cluster];
+		//printf("parse_data: cl %x -> %x %x %x %x\n", cl_array[n_cluster], fe_hits[n_cluster].fields.abc_id, fe_hits[n_cluster].fields.row, fe_hits[n_cluster].fields.x, fe_hits[n_cluster].fields.strips_pattern);
+	    //res += cl_array[n_cluster];
+	}
+
+	return 0; //res;
+}
+
+extern inline unsigned parse_data_elinks(uint8_t* raw_data, uint8_t n_data_bytes, uint8_t elink_id, struct FrontEndData* out_data)
+{
+	// basic checks
+	// header 2 bytes
+	/* endianness
+	uint8_t typ = (raw_data[0] & 0xf0) >> 4;
+	if (typ != TYP_LP) {
+		printf("parse_data: ERROR header is not TYP_LP %d\n", raw_data[0]);
+		return;
+	}
+
+	uint8_t flag = (raw_data[0] & 0x8) >> 3;
+	uint8_t l0id = ((raw_data[0] & 0x7) << 4) | ((raw_data[1] & 0xf0) >> 4);
+	uint8_t bcid = raw_data[1] & 0xf;
+	*/
+
+	if (n_data_bytes<6) {
+		printf("parse_data: ERROR the packet is empty or contains 1 byte for clusters: %d (-2-2)\n", n_data_bytes);
+		return 0;
+	}
+
+	//
+	uint16_t header = *(uint16_t*) (&raw_data[0]);
+	uint16_t footer = *(uint16_t*) (&raw_data[n_data_bytes-2]);
+
+	uint8_t typ = (header & 0xf000) >> (4+8);
+	//uint8_t typ = (header & 0xf0) >> (4);
+	if (typ != TYP_LP) {
+		printf("parse_data: ERROR header is not TYP_LP %d\n", raw_data[0]);
+		return 0;
+	}
+
+	uint8_t flag = (header & 0x800) >> (3+8);
+	uint8_t l0id = (header >> 4) & 0x7f;
+	uint8_t bcid = header & 0xf;
+
+	// packet end
+	//if (raw_data[n_data_bytes-2] != 0x6f || raw_data[n_data_bytes-1] != 0xed)
+	if (footer != 0xed6f)
+	{
+		printf("parse_data: ERROR footer is not 0x6f ed : 0x%x 0x%x\n", raw_data[n_data_bytes-2], raw_data[n_data_bytes-1]);
+		return 0;
+	}
+
+	uint8_t n_cluster_bytes = n_data_bytes - 2 - 2;
+	// must be divisible by 2
+	if (n_cluster_bytes & 0x1) {
+		printf("parse_data: ERROR odd number of cluster bytes: %d\n", n_cluster_bytes);
+		return 0;
+	}
+	uint8_t n_clusters = n_cluster_bytes >> 1;
+
+	uint16_t* cl_array = ((uint16_t*) raw_data) + 1;
+	//uint16_t cl = *(uint16_t*) (&raw_data[2 + n_cluster*2 + 0]);
+
+    // TODO elink maps! for now just 2 elinks per processor
+	if ((elink_id & 0x1) == 0x1) out_data++; // out_data pad has 2 entries!
 
 	out_data->flag = flag;
 	out_data->l0id = l0id;
