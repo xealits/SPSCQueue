@@ -40,7 +40,7 @@ SOFTWARE.
 #define debug_logging 0
 #include "test_parsing.h"
 
-#define N_PROCS 1
+#define N_PROCS 4
 
 #define RECORD_PROC_TIMINGS
 //#define RECORD_MEMCPY_TIMINGS
@@ -49,7 +49,7 @@ SOFTWARE.
 
 #define MEMCPY 0
 
-#define MAX_RAWDATACONTAINER_SIZE (1024 + 512) // in bytes, must be >= 1 as there is always 1 flat size byte
+#define MAX_RAWDATACONTAINER_SIZE (1024) // in bytes, must be >= 1 as there is always 1 flat size byte
 
 #define MAX_CLUSTERS 1
 #define MAX_ABCs    10
@@ -192,9 +192,9 @@ int main(int argc, char *argv[]) {
   const size_t queueSize = 10000000;
   const int64_t iters = 1000000; // this becomes too large to reserve the buffers for raw and fe data etc
 
-  const int64_t n_containers  = 5000; //10000; //200000; // 100000;
-  const int64_t n_raw_packets = 60; // 1; // per container
-  const int64_t n_repeat      = 100;
+  const int64_t n_containers  = 10000; //10000; //200000; // 100000;
+  const int64_t n_raw_packets = 20; // 1; // per container
+  const int64_t n_repeat      = 1000;
 
 
   if (test_spscqueue) {
@@ -280,6 +280,8 @@ int main(int argc, char *argv[]) {
     nBytesProcessed.reserve(N_PROCS);
     std::vector<unsigned long long> nProcessingTime;
     nProcessingTime.reserve(N_PROCS);
+    std::vector<unsigned long long> nProcessCore;
+    nProcessCore.reserve(N_PROCS);
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
       //rawDataQueues.push_back(SPSCQueue<uint8_t>(1024*8, 512));
@@ -290,6 +292,7 @@ int main(int argc, char *argv[]) {
       nPacketsProcessed.push_back(0);
       nBytesProcessed.push_back(0);
       nProcessingTime.push_back(0);
+      nProcessCore.push_back(0);
 
       //auto t_consumer = std::thread([&]
       rawDataThreads.push_back(std::thread([&] (unsigned thread_index, int cpu_to_pin)
@@ -302,6 +305,7 @@ int main(int argc, char *argv[]) {
         uint64_t           _nPacketsProcessed = 0;
         uint64_t           _nBytesProcessed   = 0;
         unsigned long long _nProcessingTime   = 0;
+        unsigned long long _nProcessCore   = 0;
 
         std::cout << "running the consumer thread\n";
         // output data
@@ -325,6 +329,7 @@ int main(int argc, char *argv[]) {
           _nPacketsProcessed  += stats.n_packets;
           _nBytesProcessed    += stats.n_bytes;
           _nProcessingTime    += stats.t_diff;
+          _nProcessCore ++;
 
           #if (debug_logging > 0)
             std::cout << "process core after wait\n";
@@ -335,6 +340,7 @@ int main(int argc, char *argv[]) {
             _nPacketsProcessed += stats.n_packets;
             _nBytesProcessed   += stats.n_bytes;
             _nProcessingTime   += stats.t_diff;
+            _nProcessCore ++;
 
             #if (debug_logging > 0)
               std::cout << "process core after done\n";
@@ -343,6 +349,7 @@ int main(int argc, char *argv[]) {
             nPacketsProcessed [thread_index] = _nPacketsProcessed ;
             nBytesProcessed   [thread_index] = _nBytesProcessed   ;
             nProcessingTime   [thread_index] = _nProcessingTime   ;
+            nProcessCore      [thread_index] = _nProcessCore   ;
             break;
           }
         }
@@ -532,6 +539,8 @@ int main(int argc, char *argv[]) {
 
       }
       raw_data_ptr += 2+n_bytes;
+
+      //std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
 
@@ -618,6 +627,10 @@ int main(int argc, char *argv[]) {
 
     for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
       std::cout << "CPU time to process=" << std::to_string(nProcessingTime[proc_i]) << std::endl;
+    }
+
+    for (unsigned proc_i=0; proc_i<N_PROCS; proc_i++) {
+      std::cout << "CPU n calls processCore=" << std::to_string(nProcessCore[proc_i]) << std::endl;
     }
 
     //std::cout << n_repeat * n_containers * n_raw_packets * 1000000 /
